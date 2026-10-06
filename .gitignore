@@ -73,3 +73,19 @@ yarn-error.log
 !.yarn/releases
 !.yarn/sdks
 !.yarn/versions
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Firebase / Google service credentials
+**/google-services.json
+**/GoogleService-Info.plist
+
+# Firebase service account credentials
+**/*-firebase-adminsdk-*.json
+**/socialio-*.json
+
+# Android signing keys
+*.jks
+*.keystore
