@@ -288,7 +288,7 @@ useEffect(() => {
   // InCallManager owns audio routing (speaker/earpiece/bluetooth) and the
   // proximity sensor — this replaces the web version's
   // enumerateDevices()/setSinkId() dance, which has no RN equivalent.
-  useEffect(() => {
+useEffect(() => {
   if (Platform.OS !== "android" || !NativeModules.InCallManager) return;
   const emitter = new NativeEventEmitter(NativeModules.InCallManager);
   const sub = emitter.addListener("onAudioDeviceChanged", (data) => {
@@ -300,6 +300,7 @@ useEffect(() => {
         setSpeaker(false);
       } else {
         setBluetooth(false);
+        setSpeaker(data?.selectedAudioDevice === "SPEAKER_PHONE");
       }
     } catch {}
   });
@@ -315,7 +316,12 @@ useEffect(() => {
     }
     if (cancelled) return;
     InCallManager.start({ media: type === "video" ? "video" : "audio" });
-    if (type === "audio") InCallManager.setForceSpeakerphoneOn(false);
+   if (type === "audio") {
+  InCallManager.setForceSpeakerphoneOn(false);
+} else {
+  InCallManager.setForceSpeakerphoneOn(true);
+  setSpeaker(true);
+}
   })();
   return () => {
     cancelled = true;
@@ -462,15 +468,20 @@ useEffect(() => {
   };
 
 const applyBluetooth = (next) => {
-  if (Platform.OS !== "android") return; // iOS routes Bluetooth automatically
+  if (Platform.OS !== "android") return;
+
   if (next) {
     InCallManager.setForceSpeakerphoneOn(false);
     InCallManager.chooseAudioRoute("BLUETOOTH");
     setBluetooth(true);
     setSpeaker(false);
   } else {
-    InCallManager.chooseAudioRoute("EARPIECE");
+    // leave Bluetooth, then go to speaker (video) or earpiece (audio)
+    const useSpeaker = type === "video" || speaker;
+    InCallManager.chooseAudioRoute(useSpeaker ? "SPEAKER_PHONE" : "EARPIECE");
+    InCallManager.setForceSpeakerphoneOn(useSpeaker ? true : null);
     setBluetooth(false);
+    setSpeaker(useSpeaker);
   }
 };
 
