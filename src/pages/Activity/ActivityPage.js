@@ -266,6 +266,7 @@ const getNotificationTarget = (n) => {
     case "like_post":
     case "like_comment":
     case "like_reply":
+    case "new_post": // ← NEW — "shared a new post/reel/text post" now opens the post
     case "collab_request": {
       if (!postId) return null;
       const routeFor = POSTTYPE_TO_ROUTE[n.postType] || POSTTYPE_TO_ROUTE.image;
@@ -330,7 +331,7 @@ const NOTIF_TYPE_TO_SETTING_KEY = {
   memory_like_reply: "post",
 };
 const POSTTYPE_TO_SETTING_KEY = { image: "post", carousel: "post", video: "reel", text: "text" };
-const POST_DEPENDENT_TYPES = new Set(["comment", "reply", "like_post", "like_comment", "like_reply"]);
+const POST_DEPENDENT_TYPES = new Set(["comment", "reply", "like_post", "like_comment", "like_reply", "new_post"]);
 
 const isNotifTypeAllowed = (type, postType) => {
   try {
@@ -345,6 +346,88 @@ const isNotifTypeAllowed = (type, postType) => {
     return true;
   }
 };
+
+/* ─────────────────────────── post previews on cards ───────────────────────────
+   - image / video / carousel posts → small square thumbnail on the right
+   - text posts → the text under the message, with the post's images in a
+     rounded strip below it (mini TextPostView)
+   Uses the stored media url as-is (no URL tricks). React Native has no
+   built-in way to grab a video's first frame, so videos show a dark tile
+   with a ▶ badge. (If you use react-native-create-thumbnail you can swap a
+   real frame in inside MediaThumb.)
+   Needs the backend to populate `post` with `media postType text`. */
+const THUMB_TYPES = new Set([
+  "like_post", "like_comment", "like_reply",
+  "comment", "reply", "collab_request", "new_post",
+]);
+
+const isTextPostWithText = (post) =>
+  !!post && typeof post === "object" && post.postType === "text" && !!post.text?.trim();
+
+function MediaThumb({ m }) {
+  if (!m?.url) return null;
+  if (m.type === "video") {
+    return (
+      <View style={styles.videoTile}>
+        <Text style={styles.videoTilePlay}>▶</Text>
+      </View>
+    );
+  }
+  return <Image source={{ uri: m.url }} style={styles.thumbImg} resizeMode="cover" />;
+}
+
+// image / video posts → small square on the right (text posts use
+// TextPostPreview instead, so this returns null for them)
+function PostThumb({ post }) {
+  if (!post || typeof post !== "object") return null;
+  if (isTextPostWithText(post)) return null;
+
+  const first = post.media?.[0];
+  if (!first?.url) return null;
+
+  return (
+    <View style={styles.thumbWrap}>
+      <MediaThumb m={first} />
+      {first.type === "video" && <Text style={styles.thumbPlay}>▶</Text>}
+    </View>
+  );
+}
+
+// text post → text first, images underneath
+function TextPostPreview({ post }) {
+  if (!isTextPostWithText(post)) return null;
+
+  const text = post.text.trim();
+  const media = post.media || [];
+  const shown = media.slice(0, 2);
+  const extra = media.length - shown.length;
+
+  return (
+    <View style={styles.tpCard}>
+      <Text style={styles.tpText} numberOfLines={3}>
+        {text.length > 90 ? text.slice(0, 90).trimEnd() + "..." : text}
+      </Text>
+
+      {shown.length > 0 && (
+        <View style={styles.tpStrip}>
+          {shown.map((m, i) => {
+            if (!m?.url) return null;
+            return (
+              <View key={i} style={[styles.tpImgBox, { flex: 1 }]}>
+                <MediaThumb m={m} />
+                {i === shown.length - 1 && extra > 0 && (
+                  <View style={styles.tpMore}>
+                    <Text style={styles.tpMoreText}>+{extra}</Text>
+                  </View>
+                )}
+              </View>
+            );
+          })}
+        </View>
+      )}
+    </View>
+  );
+}
 
 /* ─────────────────────────── NotifCard ─────────────────────────── */
 function NotifCard({ n, busy, onAccept, onReject, onCollabRespond, onDismiss, onOpen, onOpenStory, onOpenMemory }) {
@@ -406,6 +489,9 @@ function NotifCard({ n, busy, onAccept, onReject, onCollabRespond, onDismiss, on
           )}
         </Text>
         <Text style={styles.time}>{timeAgo(n.createdAt)}</Text>
+
+        {/* text posts: text + images shown under the message */}
+        {THUMB_TYPES.has(n.type) && <TextPostPreview post={n.post} />}
       </View>
 
       {isFollowRequest && (
@@ -429,6 +515,9 @@ function NotifCard({ n, busy, onAccept, onReject, onCollabRespond, onDismiss, on
           </TouchableOpacity>
         </View>
       )}
+
+      {/* image / video posts: small square thumbnail on the right */}
+      {THUMB_TYPES.has(n.type) && <PostThumb post={n.post} />}
 
       {!isFollowRequest && !isCollabInvite && (
         <TouchableOpacity style={styles.dismissBtn} onPress={() => onDismiss(n)}>
@@ -518,7 +607,9 @@ function ActivityPage() {
     // over it in the list itself.
 const handleNewNotification = (notif) => {
   const withId = notif?._id ? notif : { ...notif, _id: `temp-${Date.now()}-${Math.random().toString(36).slice(2)}` };
-  setNotifications((prev) => [withId, ...prev]);
+  // ← NEW — skip if this notification is already in the list (e.g. it
+  // arrived over the socket AND was fetched on load), so no duplicate cards.
+  setNotifications((prev) => (prev.some((x) => x._id === withId._id) ? prev : [withId, ...prev]));
   if (isNotifTypeAllowed(notif?.type, notif?.postType)) {
     playAlertSound({ title: notif?.sender?.username || "Socialio", body: notif?.message });
   }
@@ -912,6 +1003,22 @@ const styles = {
   username: { fontWeight: "700" },
   text: { color: "#333" },
   time: { fontSize: 12, color: "#999" },
+
+  // ── image / video thumbnail (right side) ──
+  thumbWrap: { width: 44, height: 44, borderRadius: 6, overflow: "hidden", flexShrink: 0, backgroundColor: "#efefef" },
+  thumbImg: { width: "100%", height: "100%" },
+  thumbPlay: { position: "absolute", bottom: 2, right: 3, color: "#fff", fontSize: 10 },
+  videoTile: { width: "100%", height: "100%", backgroundColor: "#222", alignItems: "center", justifyContent: "center" },
+  videoTilePlay: { color: "#fff", fontSize: 14 },
+
+  // ── text post preview (under the message) ──
+  tpCard: { marginTop: 8, backgroundColor: "#fff", borderWidth: 1, borderColor: "#ececec", borderRadius: 12, padding: 8 },
+  tpText: { fontSize: 12, lineHeight: 17, color: "#111" },
+  tpStrip: { flexDirection: "row", gap: 6, marginTop: 8 },
+  tpImgBox: { height: 78, borderRadius: 10, overflow: "hidden", backgroundColor: "#f0f0f0" },
+  tpMore: { position: "absolute", bottom: 4, right: 6, backgroundColor: "rgba(0,0,0,0.6)", paddingHorizontal: 6, paddingVertical: 1, borderRadius: 10 },
+  tpMoreText: { color: "#fff", fontSize: 10, fontWeight: "700" },
+
   actions: { flexDirection: "column", gap: 6, flexShrink: 0 },
   acceptBtn: { backgroundColor: "#0095f6", paddingVertical: 7, paddingHorizontal: 14, borderRadius: 8 },
   acceptBtnText: { color: "#fff", fontSize: 13, fontWeight: "600" },

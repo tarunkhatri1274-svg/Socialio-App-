@@ -19,6 +19,7 @@ import {
 import { apiFetch, getCachedUser, updateCachedUser, useAuth } from "../../api/authToken";
 import Icon from "react-native-vector-icons/FontAwesome5";
 import FeatherIcon from "react-native-vector-icons/Feather";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import Video from "react-native-video";
 import ReactNativeBlobUtil from "react-native-blob-util";
 import { CameraRoll } from "@react-native-camera-roll/camera-roll";
@@ -2275,7 +2276,61 @@ function Explore() {
 
   const { followingIds: myFollowingIds } = useFollowStore();
   const { user: authUser, refreshAuth } = useAuth();
+// ───────── Recent searches (server-synced) ─────────
+const RECENT_MAX = 15;
+const [searchFocused, setSearchFocused] = useState(false);
+const [recentSearches, setRecentSearches] = useState([]);
+const searchInputRef = useRef(null);
 
+const fetchRecent = async () => {
+  try {
+    const res = await apiFetch(`${API}/auth/recent-searches`);
+    const data = await res.json();
+    if (data.success) setRecentSearches(data.users || []);
+  } catch (err) {
+    console.error("Recent searches fetch error:", err);
+  }
+};
+
+useEffect(() => {
+  if (authUser?._id || authUser?.id) fetchRecent();
+}, [authUser?._id, authUser?.id]);
+
+const addRecent = (user) => {
+  const id = (user._id || user.id)?.toString();
+  const myId = (authUser?._id || authUser?.id)?.toString();
+  if (!id || id === myId) return;
+  const entry = {
+    _id: id,
+    username: user.username,
+    profilePic: user.profilePic || "",
+    isPrivate: !!user.isPrivate,
+    bio: user.bio || "",
+  };
+  setRecentSearches((prev) => [entry, ...prev.filter((u) => u._id !== id)].slice(0, RECENT_MAX));
+  apiFetch(`${API}/auth/recent-searches/${id}`, { method: "POST" }).catch(() => {});
+};
+
+const removeRecent = (id) => {
+  setRecentSearches((prev) => prev.filter((u) => u._id !== id));
+  apiFetch(`${API}/auth/recent-searches/${id}`, { method: "DELETE" }).catch(fetchRecent);
+};
+
+const clearAllRecent = () => {
+  setRecentSearches([]);
+  apiFetch(`${API}/auth/recent-searches`, { method: "DELETE" }).catch(fetchRecent);
+};
+
+const openUser = (user) => {
+  const targetId = user._id || user.id;
+  if (!targetId) return;
+  const searcherId = (authUser?._id || authUser?.id)?.toString();
+  if (targetId.toString() === searcherId) {
+    navigation.navigate("MainTabs", { screen: "Profile" });
+  } else {
+    navigation.navigate("UserProfile", { userId: targetId });
+  }
+};
   const [stories, setStories] = useState([]);
   const [previewAuthorId, setPreviewAuthorId] = useState(null);
   const [seenStoryIds, setSeenStoryIds] = useState(() => new Set());
@@ -2488,11 +2543,13 @@ function Explore() {
     return () => clearTimeout(debounceRef.current);
   }, [search]);
 
-  const handleClear = () => {
-    setSearch("");
-    setResults([]);
-    setIsSearching(false);
-  };
+const handleClear = () => {
+  setSearch("");
+  setResults([]);
+  setIsSearching(false);
+  setSearchFocused(false);
+  searchInputRef.current?.blur();
+};
 
   const handleFollowChange = (authorId, followed) => {
     if (followed) addFollowing(authorId);
@@ -2560,32 +2617,34 @@ function Explore() {
 
   return (
     <View style={{ flex: 1, backgroundColor: "#fff" }} {...swipePanHandlers}>
-      <View style={styles.searchBar}>
-        {isSearching && (
-          <TouchableOpacity onPress={handleClear} style={{ padding: 4 }}>
-            <FeatherIcon name="arrow-left" size={22} color="#111" />
-          </TouchableOpacity>
-        )}
-        <View style={styles.searchBox}>
-          <FeatherIcon name="search" size={16} color="#777" />
-          <TextInput
-            placeholder="Search users..."
-            style={styles.searchBoxInput}
-            value={search}
-            onChangeText={setSearch}
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-          {search.length > 0 && (
-            <TouchableOpacity onPress={handleClear} style={styles.clearBtn}>
-              <Text style={{ color: "#fff", fontSize: 11, fontWeight: "700" }}>✕</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      </View>
+<View style={styles.searchBar}>
+  {(isSearching || searchFocused) && (
+    <TouchableOpacity onPress={handleClear} style={{ padding: 4 }}>
+      <FeatherIcon name="arrow-left" size={22} color="#111" />
+    </TouchableOpacity>
+  )}
+  <View style={styles.searchBox}>
+    <FeatherIcon name="search" size={16} color="#777" />
+    <TextInput
+      ref={searchInputRef}
+      placeholder="Search users..."
+      style={styles.searchBoxInput}
+      value={search}
+      onChangeText={setSearch}
+      onFocus={() => { setSearchFocused(true); fetchRecent(); }}
+      autoCapitalize="none"
+      autoCorrect={false}
+    />
+    {search.length > 0 && (
+      <TouchableOpacity onPress={() => setSearch("")} style={styles.clearBtn}>
+        <Text style={{ color: "#fff", fontSize: 11, fontWeight: "700" }}>✕</Text>
+      </TouchableOpacity>
+    )}
+  </View>
+</View>
 
       {isSearching ? (
-        <ScrollView style={{ flex: 1 }}>
+        <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
           {loading ? (
             <Text style={styles.loadingRow}>Searching...</Text>
           ) : results.length === 0 ? (
@@ -2595,30 +2654,10 @@ function Explore() {
               <TouchableOpacity
                 key={user._id || user.id}
                 style={styles.searchUserRow}
-                onPress={() => {
-                  // FIX: some /auth/search results were coming back with
-                  // `id` instead of `_id` (or missing entirely), so
-                  // `user._id` was `undefined` and navigating with
-                  // `userId: undefined` fell through to your own profile
-                  // on the Profile screen. Fall back to `user.id` and bail
-                  // out (instead of silently opening your own profile) if
-                  // neither is present.
-                  const targetId = user._id || user.id;
-                  if (!targetId) {
-                    console.warn("Search result has no id — check /auth/search response shape:", user);
-                    return;
-                  }
-                  // FIX: tapping yourself in search results used to open
-                  // the generic "UserProfile" viewer instead of your real
-                  // Profile tab.
-                  const searcherUser = authUser;
-                  const searcherId = (searcherUser?._id || searcherUser?.id)?.toString();
-                  if (targetId?.toString() === searcherId) {
-                    navigation.navigate("MainTabs", { screen: "Profile" });
-                  } else {
-                    navigation.navigate("UserProfile", { userId: targetId });
-                  }
-                }}
+onPress={() => {
+  addRecent(user);
+  openUser(user);
+}}
               >
                 {user.profilePic ? (
                   <Image source={{ uri: user.profilePic }} style={styles.searchUserAvatar} />
@@ -2639,6 +2678,58 @@ function Explore() {
                   )}
                 </View>
               </TouchableOpacity>
+            ))
+          )}
+        </ScrollView>
+      ) : searchFocused ? (
+        <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
+          <View style={styles.recentHeader}>
+            <Text style={styles.recentTitle}>Recent</Text>
+            {recentSearches.length > 0 && (
+              <TouchableOpacity onPress={clearAllRecent}>
+                <Text style={styles.recentClearAll}>Clear all</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {recentSearches.length === 0 ? (
+            <Text style={styles.noResults}>No recent searches.</Text>
+          ) : (
+            recentSearches.map((user) => (
+              <View key={user._id} style={styles.recentRow}>
+                <TouchableOpacity
+                  style={styles.recentRowMain}
+                  onPress={() => {
+                    addRecent(user); // moves it to the top
+                    openUser(user);
+                  }}
+                >
+                  {user.profilePic ? (
+                    <Image source={{ uri: user.profilePic }} style={styles.searchUserAvatar} />
+                  ) : (
+                    <View style={styles.searchUserAvatarFallback}>
+                      <Text style={{ fontSize: 20, fontWeight: "700", color: "#888" }}>{user.username?.[0]}</Text>
+                    </View>
+                  )}
+                  <View style={{ flex: 1 }}>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+                      <Text style={{ fontSize: 14, fontWeight: "600", color: "#111" }}>{user.username}</Text>
+                      {user.isPrivate && <Icon name="lock" size={10} color="#888" />}
+                    </View>
+                    {!!user.bio && (
+                      <Text style={{ fontSize: 12, color: "#888" }} numberOfLines={1}>{user.bio}</Text>
+                    )}
+                  </View>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={() => removeRecent(user._id)}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  style={styles.recentRemoveBtn}
+                >
+                  <FeatherIcon name="x" size={18} color="#8e8e8e" />
+                </TouchableOpacity>
+              </View>
             ))
           )}
         </ScrollView>
@@ -2746,7 +2837,12 @@ const styles = {
     alignItems: "center",
     justifyContent: "center",
   },
-
+recentHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 16, paddingTop: 14, paddingBottom: 6 },
+recentTitle: { fontSize: 15, fontWeight: "700", color: "#111" },
+recentClearAll: { fontSize: 13, fontWeight: "600", color: "#1877f2" },
+recentRow: { flexDirection: "row", alignItems: "center", paddingRight: 16 },
+recentRowMain: { flex: 1, flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 10, paddingHorizontal: 16 },
+recentRemoveBtn: { padding: 6 },
   // NEW: used by PostFeedOverlay / FeedStoryPreview instead of wrapping
   // them in their own <Modal> — see the FIX comments on those components.
   fullScreenOverlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, zIndex: 500, elevation: 500 },
