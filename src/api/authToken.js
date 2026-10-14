@@ -35,7 +35,11 @@ export async function saveAuthSession(data) {
 }
 
 export async function clearAuthSession() {
-  await AsyncStorage.multiRemove(["token", "refreshToken", "user"]);
+  await Promise.all([
+    AsyncStorage.removeItem("token"),
+    AsyncStorage.removeItem("refreshToken"),
+    AsyncStorage.removeItem("user"),
+  ]);
 }
 export async function updateCachedUser(user) {
   await AsyncStorage.setItem("user", JSON.stringify(user || {}));

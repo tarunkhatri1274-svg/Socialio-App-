@@ -204,7 +204,11 @@ export default async function getEditedImage(imageSrc, crop, filter) {
   // always normalize to a plain string before it's used anywhere else.
   const croppedUri = unwrapImageEditorResult(rawCropResult);
 
-  if (!filter) {
+  const isNeutralFilter =
+    !filter ||
+    /^(\s*(brightness|contrast|saturate)\(1(\.0+)?\)\s*)+$/.test(filter);
+
+  if (isNeutralFilter) {
     return { uri: croppedUri, type: "image/jpeg", name: `edited-${Date.now()}.jpg` };
   }
 

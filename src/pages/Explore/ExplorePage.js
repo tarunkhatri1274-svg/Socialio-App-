@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   TextInput,
   ScrollView,
+  KeyboardAvoidingView,
   Modal,
   Alert,
   Dimensions,
@@ -15,6 +16,7 @@ import {
   BackHandler,
   Platform,
   PermissionsAndroid,
+  StyleSheet,
 } from "react-native";
 import { apiFetch, getCachedUser, updateCachedUser, useAuth } from "../../api/authToken";
 import Icon from "react-native-vector-icons/FontAwesome5";
@@ -281,55 +283,63 @@ function AnchoredMenu({ visible, coords, onClose, children }) {
     </Modal>
   );
 }
-
-/* ─────────────────────────── generic BottomSheet ─────────────────────────── */
-/* FIX (root cause confirmed via the ShareSheet debugging session): this
-   used `useNativeDriver: true` on the spring-back animation while
-   `translateY` is driven manually via `setValue()` during the drag (not
-   through `Animated.event`). Mixing those two on this app's Fabric / New
-   Architecture setup desyncs the native animated node graph and the
-   whole sheet silently fails to paint — no error, no crash, just nothing
-   on screen. This is the same bug that made ShareSheet invisible before
-   it was fixed in its own file; `useNativeDriver: false` matches how the
-   value is actually driven here too, so there's no JS/native mismatch. */
 function BottomSheet({ title, onClose, children, inputBar }) {
   const translateY = useRef(new Animated.Value(0)).current;
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   const panResponder = useRef(
     PanResponder.create({
-      onMoveShouldSetPanResponder: (_, g) => g.dy > 6,
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 2,
+      onMoveShouldSetPanResponderCapture: (_, g) => g.dy > 2 && Math.abs(g.dy) > Math.abs(g.dx),
+      onPanResponderTerminationRequest: () => false,
       onPanResponderMove: (_, g) => {
         if (g.dy > 0) translateY.setValue(g.dy);
       },
       onPanResponderRelease: (_, g) => {
-        if (g.dy > 120) onClose();
-        else Animated.spring(translateY, { toValue: 0, useNativeDriver: false }).start();
+        if (g.dy > 80 || g.vy > 0.6) {
+          Animated.timing(translateY, { toValue: 600, duration: 180, useNativeDriver: false }).start(() =>
+            onCloseRef.current()
+          );
+        } else {
+          Animated.spring(translateY, { toValue: 0, useNativeDriver: false }).start();
+        }
+      },
+      onPanResponderTerminate: () => {
+        Animated.spring(translateY, { toValue: 0, useNativeDriver: false }).start();
       },
     })
   ).current;
 
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
-      <TouchableOpacity style={styles.sheetOverlay} activeOpacity={1} onPress={onClose}>
-        <Animated.View
-          {...panResponder.panHandlers}
-          onStartShouldSetResponder={() => true}
-          style={[styles.bottomSheet, { transform: [{ translateY }] }]}
-        >
-          <TouchableOpacity activeOpacity={1} style={{ flex: 1 }}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        style={styles.sheetOverlay}
+      >
+        <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={onClose} />
+        <Animated.View style={[styles.bottomSheet, { transform: [{ translateY }] }]}>
+          <View {...panResponder.panHandlers} style={{ paddingBottom: 4 }}>
             <View style={styles.sheetHandle} />
             <View style={styles.sheetTitleRow}>
               <Text style={styles.sheetTitleText}>{title}</Text>
-              <TouchableOpacity onPress={onClose} style={styles.sheetCloseIcon}>
-                <FeatherIcon name="x" size={18} color="#333" />
+              <TouchableOpacity
+                onPress={onClose}
+                style={styles.sheetCloseIcon}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              >
+                <FeatherIcon name="x" size={20} color="#333" />
               </TouchableOpacity>
             </View>
-            <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
-              {children}
-            </ScrollView>
-            {inputBar}
-          </TouchableOpacity>
+          </View>
+
+          <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
+            {children}
+          </ScrollView>
+          {inputBar}
         </Animated.View>
-      </TouchableOpacity>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -430,21 +440,22 @@ function CommentsSheet({ postId, postAuthorId, comments, setComments, onClose })
     }
   };
 
-  const inputBar = (
-    <View style={styles.commentInputBar}>
-      <Avatar src={currentUser?.profilePic} username={username} size={32} />
-      <TextInput
-        value={commentText}
-        onChangeText={setCommentText}
-        onSubmitEditing={addComment}
-        placeholder="Add a comment..."
-        style={{ flex: 1, fontSize: 14 }}
-      />
-      <TouchableOpacity onPress={addComment} disabled={!commentText.trim()}>
-        <Text style={{ color: "#1877f2", fontWeight: "700", fontSize: 14 }}>Post</Text>
-      </TouchableOpacity>
-    </View>
-  );
+const inputBar = (
+  <View style={styles.commentInputBar}>
+    <Avatar src={currentUser?.profilePic} username={username} size={32} />
+    <TextInput
+      value={commentText}
+      onChangeText={setCommentText}
+      onSubmitEditing={addComment}
+      blurOnSubmit={false}
+      placeholder="Add a comment..."
+      style={{ flex: 1, fontSize: 14 }}
+    />
+    <TouchableOpacity onPressIn={addComment} disabled={!commentText.trim()}>
+      <Text style={{ color: "#1877f2", fontWeight: "700", fontSize: 14 }}>Post</Text>
+    </TouchableOpacity>
+  </View>
+);
 
   return (
     <BottomSheet title={`Comments (${formatCount(comments.length)})`} onClose={onClose} inputBar={inputBar}>
@@ -2944,11 +2955,12 @@ recentRemoveBtn: { padding: 6 },
   // so sheet content always draws above the Navbar, matching the -1/+1
   // relationship requested.
   sheetOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.38)", justifyContent: "flex-end", zIndex: 999, elevation: 999 },
-  bottomSheet: { width: "100%", height: SCREEN_HEIGHT * 0.72, maxHeight: "85%", backgroundColor: "#fff", borderTopLeftRadius: 20, borderTopRightRadius: 20, zIndex: 999, elevation: 999 },
-  sheetHandle: { width: 40, height: 4, backgroundColor: "#ddd", borderRadius: 10, alignSelf: "center", marginTop: 12, marginBottom: 8 },
-  sheetTitleRow: { alignItems: "center", paddingHorizontal: 16, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: "#f0f0f0" },
-  sheetTitleText: { fontSize: 15, fontWeight: "700" },
-  sheetCloseIcon: { position: "absolute", right: 16, top: 0 },
+bottomSheet: { width: "100%", height: SCREEN_HEIGHT * 0.72, maxHeight: SCREEN_HEIGHT * 0.85, backgroundColor: "#fff", borderTopLeftRadius: 20, borderTopRightRadius: 20, zIndex: 999, elevation: 999 },
+sheetHandle: { width: 48, height: 5, backgroundColor: "#ccc", borderRadius: 10, alignSelf: "center", marginTop: 12, marginBottom: 8 },
+sheetTitleRow: { alignItems: "center", justifyContent: "center", minHeight: 48, paddingHorizontal: 16, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: "#f0f0f0" },
+sheetCloseIcon: { position: "absolute", right: 16, top: 0, padding: 4 },
+ sheetTitleText: { fontSize: 15, fontWeight: "700" },
+
   commentInputBar: { flexDirection: "row", alignItems: "center", borderTopWidth: 1, borderTopColor: "#f0f0f0", paddingHorizontal: 12, paddingVertical: 10, gap: 8 },
 
   // NEW: Navbar wrapper — see the zIndex swap in Explore's return above.

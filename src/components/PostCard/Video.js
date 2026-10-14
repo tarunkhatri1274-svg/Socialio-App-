@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   Image,
   ScrollView,
+  KeyboardAvoidingView,
   Modal,
   Animated,
   PanResponder,
@@ -1073,50 +1074,67 @@ function ReelStoryPreview({ story, onClose, navigation }) {
   );
 }
 
-/* ── Generic drag-to-dismiss bottom sheet used for likers/viewers/comments
-   /collaborators. ──
-   FIX (root cause confirmed via the ShareSheet debugging session): this
-   used `useNativeDriver: true` on the spring-back animation while
-   `translateY` is driven manually via `setValue()` during the drag
-   (not through `Animated.event`). Mixing those two on this app's Fabric /
-   New Architecture setup desyncs the native animated node graph and the
-   whole sheet silently fails to paint — no error, no crash, just nothing
-   on screen. `useNativeDriver: false` matches how the value is actually
-   being driven, so there's no JS/native thread mismatch anymore. */
 function BottomSheet({ onClose, title, children, inputBar }) {
   const translateY = useRef(new Animated.Value(0)).current;
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   const panResponder = useRef(
     PanResponder.create({
-      onMoveShouldSetPanResponder: (_, g) => g.dy > 6,
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 2,
+      onMoveShouldSetPanResponderCapture: (_, g) => g.dy > 2 && Math.abs(g.dy) > Math.abs(g.dx),
+      onPanResponderTerminationRequest: () => false,
       onPanResponderMove: (_, g) => {
         if (g.dy > 0) translateY.setValue(g.dy);
       },
       onPanResponderRelease: (_, g) => {
-        if (g.dy > 120) onClose();
-        else Animated.spring(translateY, { toValue: 0, useNativeDriver: false }).start();
+        if (g.dy > 80 || g.vy > 0.6) {
+          Animated.timing(translateY, { toValue: 600, duration: 180, useNativeDriver: false }).start(() =>
+            onCloseRef.current()
+          );
+        } else {
+          Animated.spring(translateY, { toValue: 0, useNativeDriver: false }).start();
+        }
+      },
+      onPanResponderTerminate: () => {
+        Animated.spring(translateY, { toValue: 0, useNativeDriver: false }).start();
       },
     })
   ).current;
 
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
-      <TouchableOpacity style={sheet.overlay} activeOpacity={1} onPress={onClose}>
-        <Animated.View {...panResponder.panHandlers} style={[sheet.box, { transform: [{ translateY }] }]}>
-          <TouchableOpacity activeOpacity={1} style={{ flex: 1 }}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        style={sheet.overlay}
+      >
+        <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={onClose} />
+        <Animated.View style={[sheet.box, { transform: [{ translateY }] }]}>
+          <View {...panResponder.panHandlers} style={{ paddingBottom: 4 }}>
             <View style={sheet.handle} />
             <View style={sheet.header}>
               <Text style={{ fontWeight: "700", fontSize: 15 }}>{title}</Text>
-              <TouchableOpacity onPress={onClose} style={sheet.closeX}>
-                <FeatherIcon name="x" size={18} color="#333" />
+              <TouchableOpacity
+                onPress={onClose}
+                style={sheet.closeX}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              >
+                <FeatherIcon name="x" size={20} color="#333" />
               </TouchableOpacity>
             </View>
-            <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
-              {children}
-            </ScrollView>
-            {inputBar}
-          </TouchableOpacity>
+          </View>
+
+          <ScrollView
+            style={{ flex: 1 }}
+            keyboardShouldPersistTaps="handled"
+            nestedScrollEnabled
+          >
+            {children}
+          </ScrollView>
+          {inputBar}
         </Animated.View>
-      </TouchableOpacity>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -2091,6 +2109,7 @@ socket.on(`post:${p._id}:likes`, onLikes);
                 value={commentText}
                 onChangeText={setCommentText}
                 onSubmitEditing={addComment}
+                blurOnSubmit={false}
                 placeholder="Add a comment..."
                 style={sheet.input}
               />
@@ -2176,7 +2195,7 @@ const S = StyleSheet.create({
    applied to Navbar in VideoPage.js. ── */
 const sheet = StyleSheet.create({
   overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end", zIndex: 999, elevation: 999 },
-  box: { width: "100%", height: SCREEN_HEIGHT * 0.72, maxHeight: "85%", backgroundColor: "#fff", borderTopLeftRadius: 20, borderTopRightRadius: 20, zIndex: 999, elevation: 999 },
+ box: { width: "100%", height: SCREEN_HEIGHT * 0.72, maxHeight: SCREEN_HEIGHT * 0.85, backgroundColor: "#fff", borderTopLeftRadius: 20, borderTopRightRadius: 20, zIndex: 999, elevation: 999 },
   handle: { width: 40, height: 4, backgroundColor: "#ddd", borderRadius: 10, alignSelf: "center", marginTop: 10, marginBottom: 6 },
   header: { alignItems: "center", paddingVertical: 10, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: "#f0f0f0" },
   closeX: { position: "absolute", right: 16, top: 10 },

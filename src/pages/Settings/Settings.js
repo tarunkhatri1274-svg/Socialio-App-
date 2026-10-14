@@ -20,33 +20,22 @@ function Settings() {
   const notificationsettings = () => navigation.navigate("NotificationSettings");
   const blocked = () => navigation.navigate("Blocked");
 
-  const handleLogout = async () => {
-    setError("");
-    setLoggingOut(true);
-    try {
-      await apiFetch(`${API}/auth/logout`, { method: "POST" });
-    } catch (err) {
-      // Even if the request fails, still log the user out locally
-      console.log("Logout request failed:", err.message);
-    } finally {
-      // FIX — this used to only remove AsyncStorage's token/user, which
-      // left the socket connected, Sockets.js's in-memory caches
-      // (cachedUserId, activeChatId, notifSettings) stale, and — most
-      // importantly — this device's FCM push token still registered
-      // against the account being logged out on the backend. Clearing
-      // the device token FIRST (while the auth token is still valid,
-      // since it's needed to authenticate that request), then tearing
-      // down the socket, then finally clearing AsyncStorage, so a
-      // different account logging in on this same phone afterward
-      // doesn't inherit stale socket state or receive this account's
-      // push notifications.
-      await clearDeviceToken();
-      clearSocketState();
-      await clearAuth();
-      setLoggingOut(false);
-      navigation.reset({ index: 0, routes: [{ name: "Login" }] });
-    }
-  };
+const handleLogout = async () => {
+  setError("");
+  setLoggingOut(true);
+  try {
+    await apiFetch(`${API}/auth/logout`, { method: "POST" });
+  } catch (err) {
+    console.log("Logout request failed:", err.message);
+  }
+
+  try { await clearDeviceToken(); } catch (e) { console.log("clearDeviceToken failed:", e.message, e.stack); }
+  try { clearSocketState(); } catch (e) { console.log("clearSocketState failed:", e.message, e.stack); }
+  try { await clearAuth(); } catch (e) { console.log("clearAuth failed:", e.message, e.stack); }
+
+  setLoggingOut(false);
+  navigation.reset({ index: 0, routes: [{ name: "Login" }] });
+};
 
   return (
     <View style={styles.container}>

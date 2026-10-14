@@ -246,6 +246,7 @@ export default function EditImagePage({ images: propImages, files: propFiles, on
   // the crop frame itself, so crop+filter both come out correct
   // together with no coordinate math at all.
   const [capturedUris, setCapturedUris] = useState(images.map(() => null));
+  const loadedRef = useRef({});
   const frameShotRef = useRef(null);
 
   // ← NEW: `images` now arrives as the picker's raw, full-camera-
@@ -329,7 +330,12 @@ useEffect(() => {
   // repeatedly — re-capturing an index just overwrites its entry.
   const captureCurrentFrame = useCallback(async (index) => {
     if (!frameShotRef.current) return null;
+    // Don't screenshot a frame whose image hasn't loaded yet.
+    // The fallback in AddImagePost.js handles a missing capture.
+    if (!loadedRef.current[index]) return null;
     try {
+      // Let the freshly shown image paint before capturing.
+      await new Promise((r) => setTimeout(r, 120));
       const uri = await frameShotRef.current.capture();
       setCapturedUris((prev) => {
         const next = [...prev];
@@ -352,7 +358,7 @@ useEffect(() => {
   };
 
   const handleNext = async () => {
-    const filterStrings = edits.map(buildFilter);
+    const filterStrings = edits.map((e) => (isIdentityEdit(e) ? "" : buildFilter(e)));
 
     // Capture whatever's currently on screen before navigating away —
     // this covers the image the user was actively looking at when they
@@ -539,7 +545,7 @@ useEffect(() => {
               crop grid lines and "ORIGINAL" compare tag below are UI
               chrome, not part of the photo, so they're kept as
               siblings OUTSIDE it and never get baked into the capture. */}
-          <ViewShot ref={frameShotRef} options={{ format: "jpg", quality: 0.92 }} style={StyleSheet.absoluteFill}>
+         <ViewShot ref={frameShotRef} collapsable={false} options={{ format: "jpg", quality: 0.92 }} style={StyleSheet.absoluteFill}>
           {!displayUris[currentIndex] ? (
             // ← Working copy for this image isn't resized yet — show a
             // spinner instead of mounting the ColorMatrix/Image against
@@ -561,6 +567,7 @@ useEffect(() => {
               <Image
                 source={{ uri: displayUris[currentIndex] }}
                 onLoad={(e) => {
+                  loadedRef.current[currentIndex] = true;
                   const { width: w, height: h } = e.nativeEvent.source;
                   if (w && h) {
                     setNaturalRatios((prev) => {
@@ -585,6 +592,7 @@ useEffect(() => {
             <Image
               source={{ uri: displayUris[currentIndex] }}
               onLoad={(e) => {
+                loadedRef.current[currentIndex] = true;
                 const { width: w, height: h } = e.nativeEvent.source;
                 if (w && h) {
                   setNaturalRatios((prev) => {

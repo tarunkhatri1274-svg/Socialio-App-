@@ -6,6 +6,8 @@ import {
   TouchableOpacity,
   Image,
   FlatList,
+  ScrollView,
+  KeyboardAvoidingView,
   Modal,
   Animated,
   PanResponder,
@@ -1042,38 +1044,73 @@ function ReelStoryPreview({ story, onClose, navigation }) {
    whole sheet silently fails to paint — no error, no crash, just nothing
    on screen. `useNativeDriver: false` matches how the value is actually
    being driven, so there's no JS/native thread mismatch anymore. */
-function BottomSheet({ onClose, title, children, inputBar }) {
+function BottomSheet({ onClose, title, children, inputBar, scrollable = false }) {
   const translateY = useRef(new Animated.Value(0)).current;
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   const panResponder = useRef(
     PanResponder.create({
-      onMoveShouldSetPanResponder: (_, g) => g.dy > 6,
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 2,
+      onMoveShouldSetPanResponderCapture: (_, g) => g.dy > 2 && Math.abs(g.dy) > Math.abs(g.dx),
+      onPanResponderTerminationRequest: () => false,
       onPanResponderMove: (_, g) => {
         if (g.dy > 0) translateY.setValue(g.dy);
       },
       onPanResponderRelease: (_, g) => {
-        if (g.dy > 120) onClose();
-        else Animated.spring(translateY, { toValue: 0, useNativeDriver: false }).start();
+        if (g.dy > 80 || g.vy > 0.6) {
+          Animated.timing(translateY, { toValue: 600, duration: 180, useNativeDriver: false }).start(() =>
+            onCloseRef.current()
+          );
+        } else {
+          Animated.spring(translateY, { toValue: 0, useNativeDriver: false }).start();
+        }
+      },
+      onPanResponderTerminate: () => {
+        Animated.spring(translateY, { toValue: 0, useNativeDriver: false }).start();
       },
     })
   ).current;
 
   return (
-    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
-      <TouchableOpacity style={sheet.overlay} activeOpacity={1} onPress={onClose}>
-        <Animated.View {...panResponder.panHandlers} style={[sheet.box, { transform: [{ translateY }] }]}>
-          <TouchableOpacity activeOpacity={1} style={{ flex: 1 }}>
+    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        style={[sheet.overlay]}
+      >
+        <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={onClose} />
+        <Animated.View style={[sheet.box, { transform: [{ translateY }] }]}>
+          {/* Drag zone: handle + header */}
+          <View {...panResponder.panHandlers} style={{ paddingBottom: 4 }}>
             <View style={sheet.handle} />
             <View style={sheet.header}>
               <Text style={{ fontWeight: "700", fontSize: 15 }}>{title}</Text>
-              <TouchableOpacity onPress={onClose} style={sheet.closeX}>
-                <FeatherIcon name="x" size={18} color="#333" />
+              <TouchableOpacity
+                onPress={onClose}
+                style={sheet.closeX}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              >
+                <FeatherIcon name="x" size={20} color="#333" />
               </TouchableOpacity>
             </View>
+          </View>
+
+          {scrollable ? (
+<ScrollView
+  style={{ flex: 1 }}
+  contentContainerStyle={{ paddingHorizontal: 12, paddingTop: 12, paddingBottom: 0 }}
+  keyboardShouldPersistTaps="handled"
+  nestedScrollEnabled
+>
+  {children}
+</ScrollView>
+          ) : (
             <View style={{ flex: 1 }}>{children}</View>
-            {inputBar}
-          </TouchableOpacity>
+          )}
+          {inputBar}
         </Animated.View>
-      </TouchableOpacity>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -1692,14 +1729,16 @@ const isDownloadingRef = useRef(false);
       <View style={S.wrapper}>
         {/* VIDEO */}
         <TouchableOpacity activeOpacity={1} style={S.videoBox} onPress={handleVideoTap}>
-          <Video
-            source={isVisible ? { uri: p?.media?.[0]?.url || "" } : undefined}
-            style={S.video}
-            resizeMode="contain"
-            repeat
-            muted={muted}
-            paused={!isVisible || paused}
-          />
+<View style={S.video} pointerEvents="none">
+  <Video
+    source={isVisible ? { uri: p?.media?.[0]?.url || "" } : undefined}
+    style={S.video}
+    resizeMode="contain"
+    repeat
+    muted={muted}
+    paused={!isVisible || paused}
+  />
+</View>
           <View style={S.overlayGradient} pointerEvents="none" />
           {flashPause && (
             <View style={S.flashWrap} pointerEvents="none">
@@ -1964,30 +2003,40 @@ const isDownloadingRef = useRef(false);
         </BottomSheet>
       )}
 
-      {/* COMMENTS SHEET */}
-      {showComments && canComment && (
-        <BottomSheet
-          title={`Comments (${formatCount(commentCount)})`}
-          onClose={() => setShowComments(false)}
-          inputBar={
-            <View style={sheet.inputBar}>
-              <Avatar src={currentUser?.profilePic} username={username} size={32} />
-              <TextInput
-                value={commentText}
-                onChangeText={setCommentText}
-                onSubmitEditing={addComment}
-                placeholder="Add a comment..."
-                style={sheet.input}
-              />
-              <TouchableOpacity onPress={addComment} disabled={!commentText.trim()}>
-                <Text style={sheet.postBtnText}>Post</Text>
-              </TouchableOpacity>
-            </View>
-          }
-        >
-          <CommentSection comments={comments} setComments={setComments} currentUser={currentUser} postId={p._id} postAuthorId={p.author?._id || p.author} />
-        </BottomSheet>
-      )}
+{/* COMMENTS SHEET */}
+{showComments && canComment && (
+  <BottomSheet
+    title={`Comments (${formatCount(commentCount)})`}
+    onClose={() => setShowComments(false)}
+    inputBar={
+      <View style={sheet.inputBar}>
+        <Avatar src={currentUser?.profilePic} username={username} size={32} />
+        <TextInput
+          value={commentText}
+          onChangeText={setCommentText}
+          onSubmitEditing={addComment}
+          blurOnSubmit={false}
+          placeholder="Add a comment..."
+          style={sheet.input}
+        />
+        <TouchableOpacity onPressIn={addComment} disabled={!commentText.trim()}>
+          <Text style={sheet.postBtnText}>Post</Text>
+        </TouchableOpacity>
+      </View>
+    }
+  >
+    <View style={{ flex: 1, paddingHorizontal: 12 }}>
+      <CommentSection
+        comments={comments}
+        setComments={setComments}
+        currentUser={currentUser}
+        postId={p._id}
+        postAuthorId={p.author?._id || p.author}
+        fillParent
+      />
+    </View>
+  </BottomSheet>
+)}
 
       {/* SHARE SHEET — ShareSheet.js already has its own <Modal>, so it's
           rendered directly with no extra wrapper (matches the fix already
@@ -2165,7 +2214,7 @@ function ExploreReels() {
   initialNumToRender={2}
   maxToRenderPerBatch={2}
   windowSize={3}
-  removeClippedSubviews={true}
+  removeClippedSubviews={Platform.OS === "android" ? false : true}
 />
       )}
     </View>
@@ -2239,13 +2288,14 @@ const S = StyleSheet.create({
    and the root visibility bug together. ── */
 const sheet = StyleSheet.create({
   overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" },
-  box: { width: "100%", height: SCREEN_HEIGHT * 0.72, maxHeight: "85%", backgroundColor: "#fff", borderTopLeftRadius: 20, borderTopRightRadius: 20 },
+ box: { width: "100%", height: SCREEN_HEIGHT * 0.72, maxHeight: SCREEN_HEIGHT * 0.85, backgroundColor: "#fff", borderTopLeftRadius: 20, borderTopRightRadius: 20 },
   handle: { width: 40, height: 4, backgroundColor: "#ddd", borderRadius: 10, alignSelf: "center", marginTop: 10, marginBottom: 6 },
   header: { alignItems: "center", paddingVertical: 10, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: "#f0f0f0" },
   closeX: { position: "absolute", right: 16, top: 10 },
   row: { flexDirection: "row", gap: 10, marginBottom: 16, alignItems: "flex-start" },
   empty: { textAlign: "center", color: "#aaa", paddingVertical: 20, fontSize: 14 },
-  inputBar: { flexDirection: "row", alignItems: "center", borderTopWidth: 1, borderTopColor: "#f0f0f0", paddingVertical: 10, paddingHorizontal: 12, gap: 8 },
+list: { flex: 1, paddingHorizontal: 12, paddingTop: 12 },
+inputBar: { flexDirection: "row", alignItems: "center", borderTopWidth: 1, borderTopColor: "#f0f0f0", padding: 12, gap: 8 },
   input: { flex: 1, fontSize: 14 },
   postBtnText: { color: "#1877f2", fontWeight: "700", fontSize: 14 },
   searchWrap: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: "#f0f0f0", borderRadius: 10, paddingHorizontal: 10 },

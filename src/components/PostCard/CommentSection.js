@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from "react";
-import { View, Text, TextInput, TouchableOpacity, Image, Alert, StyleSheet, Switch, ActivityIndicator } from "react-native";
+import { View, Text, TextInput, TouchableOpacity, Image, Alert, StyleSheet, Switch, ActivityIndicator, ScrollView, Dimensions } from "react-native";
 import Icon from "react-native-vector-icons/FontAwesome5";
 import Config from "react-native-config";
 import socket from "../../sockets/Sockets";
 import { apiFetch } from "../../api/authToken"; // adjust relative path — count folders to src/api/authToken.js
 
 const API = Config.API_URL;
-
+// Height of the comment list inside a sheet (sheet is ~72% of screen; the
+// rest is handle, title row and input bar). Tune the 190 if it looks off.
+const LIST_HEIGHT = Dimensions.get("window").height * 0.72 - 190;
 function confirmAsync(message) {
   return new Promise((resolve) => {
     Alert.alert("Confirm", message, [
@@ -201,7 +203,7 @@ function CreateCommentPollForm({ onClose, onCreate }) {
   );
 }
 
-const CommentSection = ({ comments, setComments, currentUser, postId, highlightCommentId = null, highlightReplyId = null, scrollRef = null, postAuthorId = null }) => {
+const CommentSection = ({ comments, setComments, currentUser, postId, highlightCommentId = null, highlightReplyId = null, scrollRef = null, postAuthorId = null, fillParent = false }) => {
   const [editingCommentId, setEditingCommentId] = useState(null);
   const [editingCommentText, setEditingCommentText] = useState("");
   const [replyingToId, setReplyingToId] = useState(null);
@@ -214,7 +216,8 @@ const CommentSection = ({ comments, setComments, currentUser, postId, highlightC
   // their parent comment.
   const itemYRef = React.useRef({});
   const [creatingPoll, setCreatingPoll] = useState(false);
-
+const listRef = React.useRef(null);
+const [showTop, setShowTop] = useState(false);
   useEffect(() => {
     const targetCommentId = highlightReplyId
       ? comments?.find((c) => c.replies?.some((r) => r._id === highlightReplyId))?._id
@@ -223,7 +226,7 @@ const CommentSection = ({ comments, setComments, currentUser, postId, highlightC
     const y = itemYRef.current[targetCommentId];
     if (y == null) return;
     const t = setTimeout(() => {
-      scrollRef?.current?.scrollTo?.({ y: Math.max(y - 12, 0), animated: true });
+      listRef.current?.scrollTo?.({ y: Math.max(y - 12, 0), animated: true });
     }, 50);
     const clearTimer = setTimeout(() => setActiveHighlight(null), HIGHLIGHT_MS);
     return () => {
@@ -554,12 +557,26 @@ const CommentSection = ({ comments, setComments, currentUser, postId, highlightC
   const isPostOwner = !!postOwnerId && postOwnerId === myId;
   const sortedComments = sortPinned(comments);
 
-  if (creatingPoll) {
-    return <CreateCommentPollForm onClose={() => setCreatingPoll(false)} onCreate={handleCreatePoll} />;
-  }
+if (creatingPoll) {
+  const form = <CreateCommentPollForm onClose={() => setCreatingPoll(false)} onCreate={handleCreatePoll} />;
+  return fillParent ? (
+    <ScrollView keyboardShouldPersistTaps="handled">{form}</ScrollView>
+  ) : form;
+}
 
   return (
-    <View style={styles.wrap}>
+   <View style={fillParent ? { flex: 1 } : { height: LIST_HEIGHT }}>
+  <ScrollView
+    ref={listRef}
+    onScroll={(e) => {
+      const show = e.nativeEvent.contentOffset.y > 150;
+      setShowTop((prev) => (prev === show ? prev : show));
+    }}
+    scrollEventThrottle={16}
+    nestedScrollEnabled
+    keyboardShouldPersistTaps="handled"
+    contentContainerStyle={styles.wrap}
+  >
       {!!currentUser?._id && (isPostOwner || !postOwnerId) && (
         <TouchableOpacity style={pollStyles.createBar} onPress={() => setCreatingPoll(true)}>
           <Icon name="poll" size={13} color={POLL_ACCENT} />
@@ -805,8 +822,20 @@ const CommentSection = ({ comments, setComments, currentUser, postId, highlightC
           </View>
         );
       })}
-    </View>
-  );
+    </ScrollView>
+
+    {showTop && (
+      <TouchableOpacity
+        activeOpacity={0.85}
+        onPress={() => listRef.current?.scrollTo({ y: 0, animated: true })}
+        style={styles.topBtn}
+      >
+        <Icon name="arrow-up" size={11} color="#fff" />
+        <Text style={styles.topBtnText}>Pinned</Text>
+      </TouchableOpacity>
+    )}
+  </View>
+);
 };
 
 export default CommentSection;
@@ -888,6 +917,25 @@ const styles = StyleSheet.create({
   saveBtnText: { color: "#fff", fontSize: 12, fontWeight: "600" },
   cancelBtn: { paddingHorizontal: 13, paddingVertical: 4, borderRadius: 8, backgroundColor: "#f0f0f0" },
   cancelBtnText: { color: "#333", fontSize: 12 },
+
+  topBtn: {
+  position: "absolute",
+  right: 12,
+  bottom: 10,
+  flexDirection: "row",
+  alignItems: "center",
+  gap: 6,
+  backgroundColor: "#1877f2",
+  paddingHorizontal: 14,
+  paddingVertical: 9,
+  borderRadius: 20,
+  elevation: 6,
+  shadowColor: "#000",
+  shadowOffset: { width: 0, height: 2 },
+  shadowOpacity: 0.25,
+  shadowRadius: 4,
+},
+topBtnText: { color: "#fff", fontSize: 12, fontWeight: "700" },
 });
 
 const pollStyles = StyleSheet.create({

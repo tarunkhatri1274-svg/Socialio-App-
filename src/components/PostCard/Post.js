@@ -6,6 +6,7 @@ import {
   TextInput,
   TouchableOpacity,
   ScrollView,
+  KeyboardAvoidingView,
   Modal,
   Animated,
   PanResponder,
@@ -126,52 +127,68 @@ function AnchoredMenu({ visible, coords, onClose, children }) {
   );
 }
 
-/* ── Generic bottom sheet (drag-to-dismiss via PanResponder), same
-   shape as the one built for Homepage.js's LikersSheet/CommentsSheet. ──
-   FIX (root cause confirmed via the ShareSheet debugging session): this
-   used `useNativeDriver: true` on the spring-back animation while
-   `translateY` is driven manually via `setValue()` during the drag (not
-   through `Animated.event`). Mixing those two on this app's Fabric / New
-   Architecture setup desyncs the native animated node graph and the
-   whole sheet silently fails to paint — no error, no crash, just nothing
-   on screen. This is exactly why Likers/Comments weren't opening while
-   ShareSheet (already fixed the same way in its own file) was fine.
-   `useNativeDriver: false` matches how the value is actually driven, so
-   there's no JS/native thread mismatch anymore. */
 function BottomSheet({ title, onClose, children, inputBar, scrollViewRef }) {
   const translateY = useRef(new Animated.Value(0)).current;
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   const panResponder = useRef(
     PanResponder.create({
-      onMoveShouldSetPanResponder: (_, g) => g.dy > 6,
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 2,
+      onMoveShouldSetPanResponderCapture: (_, g) => g.dy > 2 && Math.abs(g.dy) > Math.abs(g.dx),
+      onPanResponderTerminationRequest: () => false,
       onPanResponderMove: (_, g) => {
         if (g.dy > 0) translateY.setValue(g.dy);
       },
       onPanResponderRelease: (_, g) => {
-        if (g.dy > 120) onClose();
-        else Animated.spring(translateY, { toValue: 0, useNativeDriver: false }).start();
+        if (g.dy > 80 || g.vy > 0.6) {
+          Animated.timing(translateY, { toValue: 600, duration: 180, useNativeDriver: false }).start(() =>
+            onCloseRef.current()
+          );
+        } else {
+          Animated.spring(translateY, { toValue: 0, useNativeDriver: false }).start();
+        }
+      },
+      onPanResponderTerminate: () => {
+        Animated.spring(translateY, { toValue: 0, useNativeDriver: false }).start();
       },
     })
   ).current;
 
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
-      <TouchableOpacity style={styles.sheetOverlay} activeOpacity={1} onPress={onClose}>
-        <Animated.View {...panResponder.panHandlers} style={[styles.sheet, { transform: [{ translateY }] }]}>
-          <TouchableOpacity activeOpacity={1} style={{ flex: 1 }}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        style={styles.sheetOverlay}
+      >
+        <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={onClose} />
+        <Animated.View style={[styles.sheet, { transform: [{ translateY }] }]}>
+          <View {...panResponder.panHandlers} style={{ paddingBottom: 4 }}>
             <View style={styles.sheetHandle} />
             <View style={styles.sheetHeader}>
               <Text style={{ fontWeight: "700", fontSize: 15 }}>{title}</Text>
-              <TouchableOpacity onPress={onClose} style={styles.sheetCloseIcon}>
-                <FeatherIcon name="x" size={18} color="#333" />
+              <TouchableOpacity
+                onPress={onClose}
+                style={styles.sheetCloseIcon}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              >
+                <FeatherIcon name="x" size={20} color="#333" />
               </TouchableOpacity>
             </View>
-            <ScrollView ref={scrollViewRef} style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
-              {children}
-            </ScrollView>
-            {inputBar}
-          </TouchableOpacity>
+          </View>
+
+          <ScrollView
+            ref={scrollViewRef}
+            style={{ flex: 1 }}
+            keyboardShouldPersistTaps="handled"
+            nestedScrollEnabled
+          >
+            {children}
+          </ScrollView>
+          {inputBar}
         </Animated.View>
-      </TouchableOpacity>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -1283,16 +1300,17 @@ const onCollabResponded = ({ postId }) => {
           inputBar={
             <View style={styles.commentInputBar}>
               <Avatar src={currentUser?.profilePic} username={username} size={32} />
-              <TextInput
-                value={commentText}
-                onChangeText={setCommentText}
-                onSubmitEditing={addComment}
-                placeholder="Add a comment..."
-                style={{ flex: 1, fontSize: 14 }}
-              />
-              <TouchableOpacity onPress={addComment} disabled={!commentText.trim()}>
-                <Text style={{ color: "#1877f2", fontWeight: "700", fontSize: 14 }}>Post</Text>
-              </TouchableOpacity>
+<TextInput
+  value={commentText}
+  onChangeText={setCommentText}
+  onSubmitEditing={addComment}
+  blurOnSubmit={false}
+  placeholder="Add a comment..."
+  style={{ flex: 1, fontSize: 14 }}
+/>
+<TouchableOpacity onPressIn={addComment} disabled={!commentText.trim()}>
+  <Text style={{ color: "#1877f2", fontWeight: "700", fontSize: 14 }}>Post</Text>
+</TouchableOpacity>
             </View>
           }
         >
@@ -1519,10 +1537,10 @@ const styles = StyleSheet.create({
   // explicit `height`, fixing both the sizing complaint and the root
   // visibility bug together.
   sheetOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)", justifyContent: "flex-end" },
-  sheet: { width: "100%", height: SCREEN_HEIGHT * 0.72, maxHeight: "85%", backgroundColor: "#fff", borderTopLeftRadius: 20, borderTopRightRadius: 20 },
-  sheetHandle: { width: 40, height: 4, backgroundColor: "#ddd", borderRadius: 10, alignSelf: "center", marginTop: 10, marginBottom: 6 },
-  sheetHeader: { alignItems: "center", paddingVertical: 10, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: "#f0f0f0" },
-  sheetCloseIcon: { position: "absolute", right: 16, top: 10 },
+sheet: { width: "100%", height: SCREEN_HEIGHT * 0.72, maxHeight: SCREEN_HEIGHT * 0.85, backgroundColor: "#fff", borderTopLeftRadius: 20, borderTopRightRadius: 20 },
+sheetHandle: { width: 48, height: 5, backgroundColor: "#ccc", borderRadius: 10, alignSelf: "center", marginTop: 10, marginBottom: 6 },
+sheetHeader: { alignItems: "center", justifyContent: "center", minHeight: 48, paddingVertical: 10, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: "#f0f0f0" },
+sheetCloseIcon: { position: "absolute", right: 16, top: 12, padding: 4 },
 
   searchWrap: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: "#f0f0f0", borderRadius: 10, paddingHorizontal: 10 },
   searchInput: { flex: 1, paddingVertical: 9, paddingHorizontal: 4, fontSize: 14 },

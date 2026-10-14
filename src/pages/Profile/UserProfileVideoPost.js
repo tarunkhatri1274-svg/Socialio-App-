@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import {
   View,
   Text,
@@ -11,6 +11,7 @@ import {
   Modal,
   Alert,
   Animated,
+  PanResponder,
   Linking,
   StyleSheet,
   Dimensions,
@@ -816,6 +817,39 @@ function CollabRow({ collaborators, postId, isOwner, onCollabUpdate }) {
     </View>
   );
 }
+// ── Drag-down-to-close for bottom sheets (handle + header only) ─────────
+function useSheetDrag(onClose) {
+  const translateY = useRef(new Animated.Value(0)).current;
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 2,
+      onMoveShouldSetPanResponderCapture: (_, g) => g.dy > 2 && Math.abs(g.dy) > Math.abs(g.dx),
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderMove: (_, g) => {
+        if (g.dy > 0) translateY.setValue(g.dy);
+      },
+      onPanResponderRelease: (_, g) => {
+        if (g.dy > 80 || g.vy > 0.6) {
+          Animated.timing(translateY, { toValue: 600, duration: 180, useNativeDriver: false }).start(() => {
+            onCloseRef.current();
+            translateY.setValue(0); // reset so the sheet reopens in place
+          });
+        } else {
+          Animated.spring(translateY, { toValue: 0, useNativeDriver: false }).start();
+        }
+      },
+      onPanResponderTerminate: () => {
+        Animated.spring(translateY, { toValue: 0, useNativeDriver: false }).start();
+      },
+    })
+  ).current;
+
+  return { translateY, panHandlers: panResponder.panHandlers };
+}
 
 // ── Single reel card ────────────────────────────────────────────────────
 function ProfileVideoCard({ p = {}, onBlock, onDeleted, isOwner, isVisible: isVisibleProp, pendingSheet = null }) {
@@ -858,6 +892,11 @@ function ProfileVideoCard({ p = {}, onBlock, onDeleted, isOwner, isVisible: isVi
   const [isNotInterested, setIsNotInterested] = useState(p?.isNotInterested || false);
   const [showLikers, setShowLikers] = useState(false);
   const [showComments, setShowComments] = useState(false);
+  const commentsDrag = useSheetDrag(() => {
+  setShowComments(false);
+  setHighlightCommentId(null);
+  setHighlightReplyId(null);
+});
   const [showShare, setShowShare] = useState(false);
   const [comments, setComments] = useState(p?.comments ?? []);
   const [commentText, setCommentText] = useState("");
@@ -1376,7 +1415,11 @@ function ProfileVideoCard({ p = {}, onBlock, onDeleted, isOwner, isVisible: isVi
   const filteredLikers = likedByUsers.filter(u => u.username?.toLowerCase().includes(likerSearch.toLowerCase()));
   const filteredViewers = viewedByUsers.filter(u => u.username?.toLowerCase().includes(viewerSearch.toLowerCase()));
   const commentCount = comments.length;
-
+const videoUrl = p?.media?.[0]?.url || "";
+const videoSource = useMemo(
+  () => (isVisible ? { uri: videoUrl } : undefined),
+  [isVisible, videoUrl]
+);
   if (removedFromView) return null;
 
   return (
@@ -1384,21 +1427,34 @@ function ProfileVideoCard({ p = {}, onBlock, onDeleted, isOwner, isVisible: isVi
 
       {/* VIDEO */}
       <TouchableOpacity activeOpacity={1} style={S.videoBox} onPress={handleVideoTap}>
-        <Video
-          source={isVisible ? { uri: p?.media?.[0]?.url || "" } : undefined}
-          style={S.video}
-          resizeMode="contain"
-          repeat
-          muted={muted}
-          paused={paused || !isVisible}
-          viewType={ViewType.TEXTURE} 
-        />
+<View style={S.video} pointerEvents="none">
+  <Video
+    source={videoSource}
+    style={S.video}
+    resizeMode="contain"
+    repeat
+    muted={muted}
+    paused={paused || !isVisible}
+    
+  />
+</View>
         <View style={S.overlay} pointerEvents="none" />
-        {flashPause && (
-          <View style={S.flashWrap} pointerEvents="none">
-            <FA5Icon name={paused ? "play" : "pause"} size={60} color="#fff" solid />
-          </View>
-        )}
+{flashPause && (
+  <View style={S.flashWrap} pointerEvents="none">
+    <View
+      style={{
+        width: 90,
+        height: 90,
+        borderRadius: 45,
+        backgroundColor: "rgba(0,0,0,0.45)",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      <FA5Icon name={paused ? "play" : "pause"} size={40} color="#fff" solid />
+    </View>
+  </View>
+)}
         {showLikeBurst && (
           <Animated.View
             pointerEvents="none"
@@ -1621,20 +1677,46 @@ function ProfileVideoCard({ p = {}, onBlock, onDeleted, isOwner, isVisible: isVi
       )}
 
       {/* COMMENTS SHEET */}
+{/* COMMENTS SHEET */}
 {showComments && canComment && (
-  <Modal visible transparent animationType="slide" onRequestClose={() => { setShowComments(false); setHighlightCommentId(null); setHighlightReplyId(null); }}>
+  <Modal
+    visible
+    transparent
+    animationType="slide"
+    onRequestClose={() => { setShowComments(false); setHighlightCommentId(null); setHighlightReplyId(null); }}
+  >
     <KeyboardAvoidingView
       behavior={Platform.OS === "ios" ? "padding" : "height"}
       style={sheet.overlay}
     >
-      <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => { setShowComments(false); setHighlightCommentId(null); setHighlightReplyId(null); }} />
-      <TouchableOpacity activeOpacity={1} style={sheet.box} onPress={() => {}}>
-              <View style={sheet.handle} />
-              <View style={sheet.header}>
-                <Text style={{ fontWeight: "700" }}>Comments ({formatCount(commentCount)})</Text>
-                <TouchableOpacity style={sheet.closeX} onPress={() => { setShowComments(false); setHighlightCommentId(null); setHighlightReplyId(null); }}><FeatherIcon name="x" size={18} /></TouchableOpacity>
-              </View>
-<ScrollView ref={commentsScrollRef} style={sheet.list} keyboardShouldPersistTaps="handled">
+      <TouchableOpacity
+        style={StyleSheet.absoluteFill}
+        activeOpacity={1}
+        onPress={() => { setShowComments(false); setHighlightCommentId(null); setHighlightReplyId(null); }}
+      />
+      <Animated.View style={[sheet.box, { transform: [{ translateY: commentsDrag.translateY }] }]}>
+        {/* Drag zone: handle + header */}
+        <View {...commentsDrag.panHandlers} style={{ paddingBottom: 4 }}>
+          <View style={sheet.handle} />
+          <View style={sheet.header}>
+            <Text style={{ fontWeight: "700", fontSize: 15 }}>Comments ({formatCount(commentCount)})</Text>
+            <TouchableOpacity
+              style={sheet.closeX}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              onPress={() => { setShowComments(false); setHighlightCommentId(null); setHighlightReplyId(null); }}
+            >
+              <FeatherIcon name="x" size={20} color="#333" />
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        <ScrollView
+          ref={commentsScrollRef}
+          style={sheet.list}
+          keyboardShouldPersistTaps="handled"
+          nestedScrollEnabled
+        >
+<View style={{ flex: 1, paddingHorizontal: 12 }}>
   <CommentSection
     comments={comments}
     setComments={setComments}
@@ -1643,25 +1725,29 @@ function ProfileVideoCard({ p = {}, onBlock, onDeleted, isOwner, isVisible: isVi
     postAuthorId={p.author?._id || p.author}
     highlightCommentId={highlightCommentId}
     highlightReplyId={highlightReplyId}
-    scrollRef={commentsScrollRef}
+    fillParent
   />
-</ScrollView>
-              <View style={sheet.inputBar}>
-                <Avatar src={currentUser?.profilePic} username={username} size={32} />
-                <TextInput
-                  value={commentText} onChangeText={setCommentText}
-                  onSubmitEditing={addComment}
-                  placeholder="Add a comment..." style={sheet.input}
-                />
-                <TouchableOpacity onPress={addComment} disabled={!commentText.trim()}>
-                  <Text style={sheet.postBtn}>Post</Text>
-                </TouchableOpacity>
-              </View>
-            </TouchableOpacity>
-          
-        </KeyboardAvoidingView>
-        </Modal>
-      )}
+</View>
+        </ScrollView>
+
+        <View style={sheet.inputBar}>
+          <Avatar src={currentUser?.profilePic} username={username} size={32} />
+          <TextInput
+            value={commentText}
+            onChangeText={setCommentText}
+            onSubmitEditing={addComment}
+            blurOnSubmit={false}
+            placeholder="Add a comment..."
+            style={sheet.input}
+          />
+          <TouchableOpacity onPressIn={addComment} disabled={!commentText.trim()}>
+            <Text style={sheet.postBtn}>Post</Text>
+          </TouchableOpacity>
+        </View>
+      </Animated.View>
+    </KeyboardAvoidingView>
+  </Modal>
+)}
 
       {/* FIX (real cause, not a cache issue): ShareSheet already renders
           its own <Modal visible transparent .../> internally. My earlier
@@ -1699,7 +1785,7 @@ function UserProfileVideoPost() {
   // of truth for FlatList paging — this is what was causing reels to
   // appear cut off / offset with a black gap above them.
   const { height: winH, width: winW } = useWindowDimensions();
-  const [containerHeight, setContainerHeight] = useState(winH || SCREEN_H);
+  const [containerHeight, setContainerHeight] = useState(0);
   const containerWidth = winW || SCREEN_W;
 
   const { user: currentUser } = useAuth();
@@ -1851,55 +1937,59 @@ const [activeIndex, setActiveIndex] = useState(initialIndex);
   }
 
   return (
-    <View
-      style={{ flex: 1, backgroundColor: "#000" }}
-      onLayout={(e) => {
-        const h = e.nativeEvent.layout.height;
-        if (h && Math.abs(h - containerHeight) > 1) setContainerHeight(h);
-      }}
-    >
+<View
+  style={{ flex: 1, backgroundColor: "#000" }}
+  onLayout={(e) => {
+    const h = Math.round(e.nativeEvent.layout.height);
+    if (h > 0 && h !== containerHeight) setContainerHeight(h);
+  }}
+>
       <TouchableOpacity onPress={() => navigation.goBack()} style={backBtnStyle}>
         <FeatherIcon name="arrow-left" size={20} color="#fff" />
       </TouchableOpacity>
 
-      {visibleVideos.length === 0 ? (
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-          <Text style={{ color: "#fff", fontSize: 16 }}>No reels available</Text>
+ {visibleVideos.length === 0 ? (
+  <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+    <Text style={{ color: "#fff", fontSize: 16 }}>No reels available</Text>
+  </View>
+) : containerHeight === 0 ? null : (
+  <FlatList
+    key={containerHeight}
+    ref={flatListRef}
+    data={visibleVideos}
+    keyExtractor={(item) => item._id}
+    initialScrollIndex={initialIndex}
+    getItemLayout={getItemLayout}
+    onScrollToIndexFailed={onScrollToIndexFailed}
+    pagingEnabled
+    bounces={false}
+    overScrollMode="never"
+    decelerationRate="fast"
+    showsVerticalScrollIndicator={false}
+    viewabilityConfig={viewabilityConfig}
+    onViewableItemsChanged={onViewableItemsChanged}
+    renderItem={({ item: post, index }) => {
+      const postAuthorId = (post?.author?._id ?? post?.author)?.toString();
+      const isOwner = MY_ID === postAuthorId || MY_ID === ownerUserId;
+      return (
+        <View style={{ height: containerHeight, width: containerWidth }}>
+          <ProfileVideoCard
+            p={post}
+            isOwner={isOwner}
+            isVisible={index === activeIndex}
+            onBlock={handleBlock}
+            onDeleted={handleVideoDeleted}
+            pendingSheet={pendingSheet}
+          />
         </View>
-      ) : (
-<FlatList
-  ref={flatListRef}
-  data={visibleVideos}
-  keyExtractor={(item) => item._id}
-  initialScrollIndex={initialIndex}
-  getItemLayout={getItemLayout}
-  onScrollToIndexFailed={onScrollToIndexFailed}
-  pagingEnabled
-  showsVerticalScrollIndicator={false}
-  viewabilityConfig={viewabilityConfig}
-  onViewableItemsChanged={onViewableItemsChanged}
-  renderItem={({ item: post, index }) => {
-    const postAuthorId = (post?.author?._id ?? post?.author)?.toString();
-    const isOwner = MY_ID === postAuthorId || MY_ID === ownerUserId;
-    return (
-      <View style={{ height: containerHeight, width: containerWidth }}>
-        <ProfileVideoCard
-          p={post}
-          isOwner={isOwner}
-          isVisible={index === activeIndex}
-          onBlock={handleBlock}
-          onDeleted={handleVideoDeleted}
-          pendingSheet={pendingSheet}
-        />
-      </View>
-    );
-  }}
-  initialNumToRender={2}
-  maxToRenderPerBatch={2}
-  windowSize={3}
-   removeClippedSubviews={Platform.OS === "android" ? false : true}
-/>
-      )}
+      );
+    }}
+    initialNumToRender={2}
+    maxToRenderPerBatch={2}
+    windowSize={3}
+    removeClippedSubviews={false}
+  />
+)}
     </View>
   );
 }
@@ -1912,7 +2002,13 @@ const S = StyleSheet.create({
   videoBox: { ...StyleSheet.absoluteFillObject },
   video: { width: "100%", height: "100%" },
   overlay: { ...StyleSheet.absoluteFillObject },
-  flashWrap: { ...StyleSheet.absoluteFillObject, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(0,0,0,0.18)" },
+flashWrap: {
+  ...StyleSheet.absoluteFillObject,
+  alignItems: "center",
+  justifyContent: "center",
+  zIndex: 15,
+  elevation: 15,
+},
   rightActions: { position: "absolute", right: 12, bottom: 20, alignItems: "center", gap: 16, zIndex: 25 },
   actionBtn: { alignItems: "center", justifyContent: "center" },
   actionLabel: { color: "#fff", fontSize: 12, fontWeight: "600" },
@@ -1928,20 +2024,12 @@ const S = StyleSheet.create({
   addTagBtn: { backgroundColor: "rgba(255,255,255,0.12)", borderWidth: 1, borderColor: "rgba(255,255,255,0.25)", borderRadius: 20, paddingHorizontal: 10, paddingVertical: 3 },
   seeStoryLabel: { color: "rgb(234,182,118)", fontSize: 10, fontWeight: "700" },
 });
-
-// FIX ("mini update" — sheets opening on too small an area of the screen,
-// and the underlying reason sheets could appear collapsed on Android):
-// `box` previously only declared `maxHeight`, and a `maxHeight`-only parent
-// doesn't give its `flex: 1` children (the `list` ScrollView) a resolvable
-// height in React Native — so the sheet shrank to fit whatever content it
-// had instead of consistently filling a generous, comfortable portion of
-// the screen. It now has an explicit `height`, so `list` reliably expands.
 const sheet = StyleSheet.create({
   overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" },
   box: { width: "100%", height: SCREEN_H * 0.68, maxHeight: SCREEN_H * 0.85, backgroundColor: "#fff", borderTopLeftRadius: 20, borderTopRightRadius: 20 },
-  handle: { width: 40, height: 4, backgroundColor: "#ddd", borderRadius: 10, alignSelf: "center", marginTop: 10, marginBottom: 6 },
-  header: { alignItems: "center", paddingVertical: 10, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: "#f0f0f0" },
-  closeX: { position: "absolute", right: 16, top: 8 },
+handle: { width: 48, height: 5, backgroundColor: "#ccc", borderRadius: 10, alignSelf: "center", marginTop: 10, marginBottom: 6 },
+header: { alignItems: "center", justifyContent: "center", minHeight: 48, paddingVertical: 10, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: "#f0f0f0" },
+closeX: { position: "absolute", right: 16, top: 12, padding: 4 },
   list: { flex: 1, padding: 12 },
   row: { flexDirection: "row", gap: 10, marginBottom: 16, alignItems: "flex-start" },
   empty: { textAlign: "center", color: "#aaa", padding: 20, fontSize: 14 },
