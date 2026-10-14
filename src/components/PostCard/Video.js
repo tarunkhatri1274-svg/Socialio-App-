@@ -1074,7 +1074,7 @@ function ReelStoryPreview({ story, onClose, navigation }) {
   );
 }
 
-function BottomSheet({ onClose, title, children, inputBar }) {
+function BottomSheet({ onClose, title, children, inputBar, scrollable = true }) {
   const translateY = useRef(new Animated.Value(0)).current;
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -1125,13 +1125,17 @@ function BottomSheet({ onClose, title, children, inputBar }) {
             </View>
           </View>
 
-          <ScrollView
-            style={{ flex: 1 }}
-            keyboardShouldPersistTaps="handled"
-            nestedScrollEnabled
-          >
-            {children}
-          </ScrollView>
+        {scrollable ? (
+  <ScrollView
+    style={{ flex: 1 }}
+    keyboardShouldPersistTaps="handled"
+    nestedScrollEnabled
+  >
+    {children}
+  </ScrollView>
+) : (
+  <View style={{ flex: 1 }}>{children}</View>
+)}
           {inputBar}
         </Animated.View>
       </KeyboardAvoidingView>
@@ -2100,6 +2104,7 @@ socket.on(`post:${p._id}:likes`, onLikes);
       {/* COMMENTS SHEET */}
       {showComments && canComment && (
         <BottomSheet
+        scrollable={false}
           title={`Comments (${formatCount(commentCount)})`}
           onClose={() => setShowComments(false)}
           inputBar={
@@ -2119,7 +2124,16 @@ socket.on(`post:${p._id}:likes`, onLikes);
             </View>
           }
         >
-          <CommentSection comments={comments} setComments={setComments} currentUser={currentUser} postId={p._id} postAuthorId={p.author?._id || p.author} />
+          <View style={{ flex: 1, paddingHorizontal: 12 }}>
+  <CommentSection
+    comments={comments}
+    setComments={setComments}
+    currentUser={currentUser}
+    postId={p._id}
+    postAuthorId={p.author?._id || p.author}
+    fillParent
+  />
+</View>
         </BottomSheet>
       )}
 
