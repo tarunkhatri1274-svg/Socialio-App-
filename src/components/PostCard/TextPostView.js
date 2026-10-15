@@ -7,7 +7,10 @@ import {
   Image,
   ScrollView,
   KeyboardAvoidingView,
-  Platform,
+    Platform,
+  InteractionManager,
+  ActivityIndicator,
+  
   Modal,
   Animated,
   PanResponder,
@@ -24,7 +27,7 @@ import socket, { joinPostRoom, leavePostRoom } from "../../sockets/Sockets";
 import CommentSection from "./CommentSection";
 import ShareSheet from "./ShareSheet";
 import { isPostSaved, toggleSavedPost, subscribeSavedPosts } from "../State/SavedPostStore";
-
+import { carouselTouchProps } from "../../components/carouselTouch";
 const API = Config.API_URL;
 // FIX: this file never imported/measured screen dimensions at all, so
 // there was nothing to size the sheet against. Added the same
@@ -104,8 +107,12 @@ function AnchoredMenu({ visible, coords, onClose, children }) {
     </Modal>
   );
 }
-
-function BottomSheet({ onClose, title, children, inputBar, scrollViewRef }) {
+function BottomSheet({ onClose, title, children, inputBar, scrollViewRef, scrollable = true }) {
+    const [ready, setReady] = useState(false);
+  useEffect(() => {
+    const task = InteractionManager.runAfterInteractions(() => setReady(true));
+    return () => task.cancel();
+  }, []);
   const translateY = useRef(new Animated.Value(0)).current;
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -157,14 +164,20 @@ function BottomSheet({ onClose, title, children, inputBar, scrollViewRef }) {
             </View>
           </View>
 
-          <ScrollView
-            ref={scrollViewRef}
-            style={{ flex: 1 }}
-            keyboardShouldPersistTaps="handled"
-            nestedScrollEnabled
-          >
-            {children}
-          </ScrollView>
+{scrollable ? (
+  <ScrollView
+    ref={scrollViewRef}
+    style={{ flex: 1 }}
+    keyboardShouldPersistTaps="handled"
+    nestedScrollEnabled
+  >
+    {ready ? children : <ActivityIndicator style={{ marginTop: 30 }} color="#999" />}
+  </ScrollView>
+) : (
+  <View style={{ flex: 1 }}>
+    {ready ? children : <ActivityIndicator style={{ marginTop: 30 }} color="#999" />}
+  </View>
+)}
           {inputBar}
         </Animated.View>
       </KeyboardAvoidingView>
@@ -670,17 +683,20 @@ const inputBar = (
 );
 
   return (
-    <BottomSheet title={`Comments (${comments.length})`} onClose={onClose} inputBar={inputBar} scrollViewRef={scrollRef}>
-      <CommentSection
-        comments={comments}
-        setComments={setComments}
-        currentUser={currentUser}
-        postId={postId}
-        postAuthorId={postAuthorId}
-        highlightCommentId={highlightCommentId}
-        highlightReplyId={highlightReplyId}
-        scrollRef={scrollRef}
-      />
+    <BottomSheet scrollable={false} title={`Comments (${comments.length})`} onClose={onClose} inputBar={inputBar} scrollViewRef={scrollRef}>
+      <View style={{ flex: 1, paddingHorizontal: 12 }}>
+        <CommentSection
+          comments={comments}
+          setComments={setComments}
+          currentUser={currentUser}
+          postId={postId}
+          postAuthorId={postAuthorId}
+          highlightCommentId={highlightCommentId}
+          highlightReplyId={highlightReplyId}
+          scrollRef={scrollRef}
+          fillParent
+        />
+      </View>
     </BottomSheet>
   );
 }
@@ -1046,27 +1062,40 @@ const goToProfile = (id) => {
           </AnchoredMenu>
         </View>
 
-        <TouchableOpacity activeOpacity={1} onPress={handleBodyTap} style={{ width: "100%", marginTop: 10, position: "relative" }}>
-          {(post?.text || post?.caption) && <ExpandableText text={post?.text || post?.caption} />}
+<View style={{ width: "100%", marginTop: 10, position: "relative" }}>
+  {(post?.text || post?.caption) && (
+    <TouchableOpacity activeOpacity={1} onPress={handleBodyTap}>
+      <ExpandableText text={post?.text || post?.caption} />
+    </TouchableOpacity>
+  )}
 
-          {post?.media?.length > 0 && (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 10 }}>
-              {post.media.map((m, i) => (
-                <View
-                  key={i}
-                  style={{
-                    marginRight: 8,
-                    width: post.media.length === 1 ? 280 : 240,
-                    borderRadius: 14,
-                    overflow: "hidden",
-                    backgroundColor: "#f0f0f0",
-                  }}
-                >
-                  <Image source={{ uri: m.url }} style={{ width: "100%", height: 240 }} resizeMode="cover" />
-                </View>
-              ))}
-            </ScrollView>
-          )}
+  {post?.media?.length > 0 && (
+    <ScrollView
+      horizontal
+      nestedScrollEnabled
+      directionalLockEnabled
+      showsHorizontalScrollIndicator={false}
+      style={{ marginTop: 10 }}
+      {...carouselTouchProps}
+    >
+      {post.media.map((m, i) => (
+        <TouchableOpacity
+          key={i}
+          activeOpacity={1}
+          onPress={handleBodyTap}
+          style={{
+            marginRight: 8,
+            width: post.media.length === 1 ? 280 : 240,
+            borderRadius: 14,
+            overflow: "hidden",
+            backgroundColor: "#f0f0f0",
+          }}
+        >
+          <Image source={{ uri: m.url }} style={{ width: "100%", height: 240 }} resizeMode="cover" />
+        </TouchableOpacity>
+      ))}
+    </ScrollView>
+  )}
 
           {showLikeBurst && (
             <View style={styles.burstOverlay} pointerEvents="none">
@@ -1118,7 +1147,7 @@ const goToProfile = (id) => {
               <Icon name="bookmark" solid={saved} size={18} color={saved ? "#f5a623" : "#555"} />
             </TouchableOpacity>
           </View>
-        </TouchableOpacity>
+        </View>
       </View>
 
       {showLikers && <LikersSheet likedByUsers={likedByUsers} onClose={() => setShowLikers(false)} onNavigate={goToProfile} />}

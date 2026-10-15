@@ -28,6 +28,7 @@ import MemoryViewer from "../../components/Memories/MemoryViewer";
 import CreateMemoryModal from "../../components/Memories/CreateMemoryModal";
 import { ProfileHeaderSkeleton, ProfileGridSkeleton } from "../../components/Skeleton/ProfileSkeleton";
 import Config from "react-native-config";
+import { carouselTouchProps, isCarouselTouchActive } from "../../components/carouselTouch";
 import { apiFetch } from "../../api/authToken"; // adjust relative path
 // FIXED — this screen used to read a "openMemory" AsyncStorage key that
 // nothing ever wrote (a leftover of the web version's sessionStorage
@@ -203,9 +204,10 @@ function Profilepage() {
   // capture to steal from its own tab buttons. Because this only claims
   // once a real horizontal drag crosses the threshold, ordinary taps on
   // a post/short/text-post thumbnail are completely unaffected.
-  const isSwipeEligible = (gestureState) =>
-    Math.abs(gestureState.dx) > SWIPE_HORIZONTAL_THRESHOLD &&
-    Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * SWIPE_DIRECTION_RATIO;
+const isSwipeEligible = (gestureState) =>
+  !isCarouselTouchActive() &&
+  Math.abs(gestureState.dx) > SWIPE_HORIZONTAL_THRESHOLD &&
+  Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * SWIPE_DIRECTION_RATIO;
 
   const tabPanResponder = useRef(
     PanResponder.create({
@@ -1106,17 +1108,24 @@ const TextPosts = ({ posts, navigation, itemRefs }) => {
 
           {!!post?.text && <ExpandableProfileText text={post.text} />}
 
-          {post?.media?.length > 0 && (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ paddingHorizontal: 12, paddingBottom: 12 }}>
-              {post.media.map((m, i) => (
-                <Image
-                  key={i}
-                  source={{ uri: m.url }}
-                  style={{ width: post.media.length === 1 ? 300 : 160, height: 160, borderRadius: 10, marginRight: 6 }}
-                />
-              ))}
-            </ScrollView>
-          )}
+{post?.media?.length > 0 && (
+  <ScrollView
+    horizontal
+    nestedScrollEnabled
+    directionalLockEnabled
+    showsHorizontalScrollIndicator={false}
+    style={{ paddingHorizontal: 12, paddingBottom: 12 }}
+    {...carouselTouchProps}
+  >
+    {post.media.map((m, i) => (
+      <Image
+        key={i}
+        source={{ uri: m.url }}
+        style={{ width: post.media.length === 1 ? 300 : 160, height: 160, borderRadius: 10, marginRight: 6 }}
+      />
+    ))}
+  </ScrollView>
+)}
         </TouchableOpacity>
       ))}
     </View>

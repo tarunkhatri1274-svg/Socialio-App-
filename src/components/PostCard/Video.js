@@ -14,7 +14,10 @@ import {
   Linking,
   Dimensions,
   StyleSheet,
-  Platform,
+   Platform,
+  InteractionManager,
+  ActivityIndicator,
+  
   PermissionsAndroid,
 } from "react-native";
 import Icon from "react-native-vector-icons/FontAwesome5";
@@ -1075,6 +1078,11 @@ function ReelStoryPreview({ story, onClose, navigation }) {
 }
 
 function BottomSheet({ onClose, title, children, inputBar, scrollable = true }) {
+    const [ready, setReady] = useState(false);
+  useEffect(() => {
+    const task = InteractionManager.runAfterInteractions(() => setReady(true));
+    return () => task.cancel();
+  }, []);
   const translateY = useRef(new Animated.Value(0)).current;
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -1126,16 +1134,18 @@ function BottomSheet({ onClose, title, children, inputBar, scrollable = true }) 
           </View>
 
         {scrollable ? (
-  <ScrollView
-    style={{ flex: 1 }}
-    keyboardShouldPersistTaps="handled"
-    nestedScrollEnabled
-  >
-    {children}
-  </ScrollView>
-) : (
-  <View style={{ flex: 1 }}>{children}</View>
-)}
+          <ScrollView
+            style={{ flex: 1 }}
+            keyboardShouldPersistTaps="handled"
+            nestedScrollEnabled
+          >
+            {ready ? children : <ActivityIndicator style={{ marginTop: 30 }} color="#999" />}
+          </ScrollView>
+        ) : (
+          <View style={{ flex: 1 }}>
+            {ready ? children : <ActivityIndicator style={{ marginTop: 30 }} color="#999" />}
+          </View>
+        )}
           {inputBar}
         </Animated.View>
       </KeyboardAvoidingView>

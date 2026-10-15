@@ -19,6 +19,8 @@ import {
   PermissionsAndroid,
   KeyboardAvoidingView,
   useWindowDimensions,
+  InteractionManager,
+  ActivityIndicator,
 } from "react-native";
 import Video, { ViewType } from "react-native-video";
 import ReactNativeBlobUtil from "react-native-blob-util";
@@ -892,6 +894,15 @@ function ProfileVideoCard({ p = {}, onBlock, onDeleted, isOwner, isVisible: isVi
   const [isNotInterested, setIsNotInterested] = useState(p?.isNotInterested || false);
   const [showLikers, setShowLikers] = useState(false);
   const [showComments, setShowComments] = useState(false);
+    const [commentsReady, setCommentsReady] = useState(false);
+  useEffect(() => {
+    if (!showComments) {
+      setCommentsReady(false);
+      return;
+    }
+    const task = InteractionManager.runAfterInteractions(() => setCommentsReady(true));
+    return () => task.cancel();
+  }, [showComments]);
   const commentsDrag = useSheetDrag(() => {
   setShowComments(false);
   setHighlightCommentId(null);
@@ -1717,16 +1728,20 @@ const videoSource = useMemo(
           nestedScrollEnabled
         >
 <View style={{ flex: 1, paddingHorizontal: 12 }}>
-  <CommentSection
-    comments={comments}
-    setComments={setComments}
-    currentUser={currentUser}
-    postId={p._id}
-    postAuthorId={p.author?._id || p.author}
-    highlightCommentId={highlightCommentId}
-    highlightReplyId={highlightReplyId}
-    fillParent
-  />
+  {commentsReady ? (
+    <CommentSection
+      comments={comments}
+      setComments={setComments}
+      currentUser={currentUser}
+      postId={p._id}
+      postAuthorId={p.author?._id || p.author}
+      highlightCommentId={highlightCommentId}
+      highlightReplyId={highlightReplyId}
+      fillParent
+    />
+  ) : (
+    <ActivityIndicator style={{ marginTop: 30 }} color="#999" />
+  )}
 </View>
         </ScrollView>
 

@@ -14,6 +14,7 @@ import {
   Animated,
   ActivityIndicator,
   Linking,
+  InteractionManager,
   KeyboardAvoidingView,
   Platform,
   PermissionsAndroid,
@@ -35,12 +36,12 @@ import {
 import { loadMutedMap, getMutedMap, subscribeMuted } from "../../components/State/MuteStore";
 import Config from "react-native-config";
 import { useNavigation, useIsFocused, useFocusEffect } from "@react-navigation/native";
-
+import { carouselTouchProps } from "../../components/carouselTouch";
 // These sibling files come from your project — convert/point them at their
 // RN versions. They're not included in this conversion since they weren't provided.
 // NEW — useSwipeToChangeTab / subscribeTabReload: shared screen-wide swipe
 // hook and the "tap the active tab to reload" bus, both exported from Navbar.
-import Navbar, { useSwipeToChangeTab, subscribeTabReload } from "../../components/Navbar/Navbar";
+import Navbar, { useSwipeToChangeTab, subscribeTabReload, setCommentsOpen } from "../../components/Navbar/Navbar";
 import StoriesBar from "../../components/StoryBar/StoriesBar";
 import StoryViewer from "../../components/StoryBar/StoryViewer";
 import socket from "../../sockets/Sockets";
@@ -968,7 +969,13 @@ function FloatingEmoji({ emoji }) {
   );
 }
 
-function BottomSheet({ title, onClose, children, inputBar }) {
+function BottomSheet({ title, onClose, children, inputBar, scrollable = true }) {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    const task = InteractionManager.runAfterInteractions(() => setReady(true));
+    return () => task.cancel();
+  }, []);
+
   const translateY = useRef(new Animated.Value(0)).current;
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -1019,9 +1026,15 @@ function BottomSheet({ title, onClose, children, inputBar }) {
             </View>
           </View>
 
-          <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
-            {children}
-          </ScrollView>
+         {scrollable ? (
+  <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
+    {ready ? children : <ActivityIndicator style={{ marginTop: 30 }} color="#999" />}
+  </ScrollView>
+) : (
+  <View style={{ flex: 1 }}>
+    {ready ? children : <ActivityIndicator style={{ marginTop: 30 }} color="#999" />}
+  </View>
+)}
           {inputBar}
         </Animated.View>
       </KeyboardAvoidingView>
@@ -1283,8 +1296,10 @@ const inputBar = (
 );
 
   return (
-    <BottomSheet title={`Comments (${formatCount(comments.length)})`} onClose={onClose} inputBar={inputBar}>
-      <CommentSection comments={comments} setComments={setComments} currentUser={currentUser} postId={postId} postAuthorId={postAuthorId} />
+    <BottomSheet scrollable={false} title={`Comments (${formatCount(comments.length)})`} onClose={onClose} inputBar={inputBar}>
+      <View style={{ flex: 1, paddingHorizontal: 12 }}>
+        <CommentSection comments={comments} setComments={setComments} currentUser={currentUser} postId={postId} postAuthorId={postAuthorId} fillParent />
+      </View>
     </BottomSheet>
   );
 }
@@ -1414,7 +1429,6 @@ function FeedTagsRow({ tags, navigation }) {
     </View>
   );
 }
-
 // NOTE: no changes here per request — collaborators for a post stay shown
 // under the post itself (this row), not attached to the author's name.
 // No collaborator sheet added, same as Explore.js.
@@ -1457,8 +1471,6 @@ function FeedCollabRow({ collaborators, navigation }) {
     </View>
   );
 }
-
-/* ─────────────────────────── FeedCarousel (swipeable image carousel) ─────────────────────────── */
 function FeedCarousel({ media, onOpen, cardWidth }) {
   const [current, setCurrent] = useState(0);
   const total = media?.length || 0;
@@ -1476,14 +1488,18 @@ function FeedCarousel({ media, onOpen, cardWidth }) {
       <ScrollView
         horizontal
         pagingEnabled
+        nestedScrollEnabled
+        directionalLockEnabled
+        scrollEventThrottle={16}
         showsHorizontalScrollIndicator={false}
         onMomentumScrollEnd={onMomentumScrollEnd}
+        {...carouselTouchProps}
       >
-{media.map((m, i) => (
-  <View key={i} style={{ width }}>
-    <Image source={{ uri: m.url }} style={[styles.postImg, { width }]} resizeMode="cover" />
-  </View>
-))}
+        {media.map((m, i) => (
+          <TouchableOpacity key={i} activeOpacity={1} onPress={onOpen} style={{ width }}>
+            <Image source={{ uri: m.url }} style={[styles.postImg, { width }]} resizeMode="cover" />
+          </TouchableOpacity>
+        ))}
       </ScrollView>
       {total > 1 && (
         <>
@@ -1508,6 +1524,9 @@ function FeedCarousel({ media, onOpen, cardWidth }) {
     </View>
   );
 }
+
+/* ─────────────────────────── FeedCarousel (swipeable image carousel) ─────────────────────────── */
+
 
 /* ─── Dropdown menus need a from-scratch replacement for the web's
    "click outside to close" (document mousedown listener). We measure the
@@ -1593,7 +1612,10 @@ const isDownloadingRef = useRef(false);
   const [collaborators, setCollaborators] = useState(p?.collaborators ?? []);
 
   useEffect(() => {
-    onSheetOpen?.(showLikers || showComments || showShare);
+    if (showLikers || showComments || showShare) {
+      setCommentsOpen(true);
+      return () => setCommentsOpen(false);
+    }
   }, [showLikers, showComments, showShare]);
 
   useEffect(() => {
@@ -1911,10 +1933,10 @@ const isDownloadingRef = useRef(false);
           </View>
         </View>
 
-        <TouchableOpacity activeOpacity={1} onPress={handleMediaTap} style={{ position: "relative" }}>
-          <FeedCarousel media={p.media} onOpen={() => {}} />
-          <HeartBurst show={showHeartBurst} />
-        </TouchableOpacity>
+       <View style={{ position: "relative" }}>
+  <FeedCarousel media={p.media} onOpen={handleMediaTap} />
+  <HeartBurst show={showHeartBurst} />
+</View>
 
         <LikesSummary
           likedByUsers={likedByUsers}
@@ -2050,7 +2072,10 @@ const isDownloadingRef = useRef(false);
   const [collaborators, setCollaborators] = useState(p?.collaborators ?? []);
 
   useEffect(() => {
-    onSheetOpen?.(showLikers || showComments || showShare);
+    if (showLikers || showComments || showShare) {
+      setCommentsOpen(true);
+      return () => setCommentsOpen(false);
+    }
   }, [showLikers, showComments, showShare]);
 
   useEffect(() => {
@@ -2504,7 +2529,10 @@ function TextFeedCard({
   const [collaborators, setCollaborators] = useState(p?.collaborators ?? []);
 
   useEffect(() => {
-    onSheetOpen?.(showLikers || showComments || showShare);
+    if (showLikers || showComments || showShare) {
+      setCommentsOpen(true);
+      return () => setCommentsOpen(false);
+    }
   }, [showLikers, showComments, showShare]);
 
   useEffect(() => {
@@ -2772,27 +2800,34 @@ function TextFeedCard({
             </TouchableOpacity>
           )}
 
-          {p?.media?.length > 0 && (
-            <TouchableOpacity activeOpacity={1} onPress={handleMediaTap} style={{ position: "relative", marginTop: 8 }}>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                {p.media.map((m, i) => (
-                  <Image
-                    key={i}
-                    source={{ uri: m.url }}
-                    style={{
-                      width: p.media.length === 1 ? SCREEN_WIDTH - 24 : 220,
-                      height: 220,
-                      borderRadius: 14,
-                      marginRight: 8,
-                      backgroundColor: "#f0f0f0",
-                    }}
-                    resizeMode="cover"
-                  />
-                ))}
-              </ScrollView>
-              <HeartBurst show={showHeartBurst} />
-            </TouchableOpacity>
-          )}
+{p?.media?.length > 0 && (
+  <View style={{ position: "relative", marginTop: 8 }}>
+    <ScrollView
+      horizontal
+      nestedScrollEnabled
+      directionalLockEnabled
+      showsHorizontalScrollIndicator={false}
+      {...carouselTouchProps}
+    >
+      {p.media.map((m, i) => (
+        <TouchableOpacity key={i} activeOpacity={1} onPress={handleMediaTap}>
+          <Image
+            source={{ uri: m.url }}
+            style={{
+              width: p.media.length === 1 ? SCREEN_WIDTH - 24 : 220,
+              height: 220,
+              borderRadius: 14,
+              marginRight: 8,
+              backgroundColor: "#f0f0f0",
+            }}
+            resizeMode="cover"
+          />
+        </TouchableOpacity>
+      ))}
+    </ScrollView>
+    <HeartBurst show={showHeartBurst} />
+  </View>
+)}
 
           <LikesSummary
             likedByUsers={likedByUsers}

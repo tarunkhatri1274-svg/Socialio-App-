@@ -17,7 +17,7 @@ import { useNavigation, useRoute } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Config from "react-native-config";
 import socket from "../../sockets/Sockets"; // adjust path to match your RN project layout
-
+import { isCarouselTouchActive } from "../carouselTouch";
 const API = Config.API_URL;
 
 const BADGE_COLOR = "rgb(234,182,118)";
@@ -142,22 +142,7 @@ function emitTabReload(screenName) {
   tabReloadListeners.forEach((fn) => fn(screenName));
 }
 
-/* ─── Screen-wide "swipe to change tab" hook ─────────────────────────────
-   Navbar's OWN PanResponder (further down this file) has to use
-   capture-phase handlers, because it has to steal the gesture away from
-   its own TouchableOpacity buttons (see the comment on that PanResponder
-   for why). A screen wrapping its whole content area must NOT do that:
-   capture-phase there would steal the touch from horizontal ScrollViews
-   too — e.g. the post image/text carousels — before they ever got a
-   chance to start scrolling.
 
-   So screens call this hook with the default (capture: false), which
-   only wires up BUBBLE-phase handlers. Bubble-phase handlers are only
-   consulted if nothing deeper in the tree already claimed the responder
-   — and a horizontal ScrollView/carousel, when swiped directly, claims
-   it first (that's ordinary, built-in RN scroll behavior). So: swipe
-   the carousel when you start the drag on it, swipe tabs everywhere
-   else on the screen. */
 export function useSwipeToChangeTab({ capture = false } = {}) {
   const navigation = useNavigation();
   const route = useRoute();
@@ -167,11 +152,12 @@ export function useSwipeToChangeTab({ capture = false } = {}) {
   const dragX = useRef(new Animated.Value(0)).current;
   const swipeDx = useRef(0);
 
-  const isEligible = (g) =>
-    !commentsOpen &&
-    PAGE_ORDER.includes(route.name) &&
-    Math.abs(g.dx) > SWIPE_INTENT_THRESHOLD &&
-    Math.abs(g.dx) > Math.abs(g.dy) * 1.5;
+const isEligible = (g) =>
+  !commentsOpen &&
+  !isCarouselTouchActive() &&
+  PAGE_ORDER.includes(route.name) &&
+  Math.abs(g.dx) > SWIPE_INTENT_THRESHOLD &&
+  Math.abs(g.dx) > Math.abs(g.dy) * 1.5;
 
   const panResponder = useRef(
     PanResponder.create({
@@ -542,7 +528,6 @@ function Navbar() {
   const bubble = latestType ? TYPE_DISPLAY[latestType] : null;
   const bubbleColor = bubble ? ICON_COLOR[bubble.icon] : BADGE_COLOR;
 
-  if (commentsOpen) return null; // was z-index: -1 on web; simplest RN equivalent is to just not render
 
   return (
     <>
@@ -574,9 +559,10 @@ function Navbar() {
             shadowOpacity: isVideoPage ? 0 : 0.15,
             // Hide the bar during the very first frame before we have a
             // measurement, so it never flashes in the wrong place.
-            opacity: barWidth ? 1 : 0,
+              opacity: !commentsOpen && barWidth ? 1 : 0,
           },
         ]}
+                pointerEvents={commentsOpen ? "none" : "auto"}
         {...panHandlers}
       >
         <Animated.View style={{ flexDirection: "row", alignItems: "center", gap: 10, transform: [{ translateX: dragX }] }}>

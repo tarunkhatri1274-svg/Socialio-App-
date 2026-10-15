@@ -17,6 +17,8 @@ import {
   StyleSheet,
   Platform,
   PermissionsAndroid,
+  InteractionManager,
+  ActivityIndicator,
 } from "react-native";
 import Icon from "react-native-vector-icons/FontAwesome5";
 import FeatherIcon from "react-native-vector-icons/Feather";
@@ -1045,6 +1047,11 @@ function ReelStoryPreview({ story, onClose, navigation }) {
    on screen. `useNativeDriver: false` matches how the value is actually
    being driven, so there's no JS/native thread mismatch anymore. */
 function BottomSheet({ onClose, title, children, inputBar, scrollable = false }) {
+    const [ready, setReady] = useState(false);
+  useEffect(() => {
+    const task = InteractionManager.runAfterInteractions(() => setReady(true));
+    return () => task.cancel();
+  }, []);
   const translateY = useRef(new Animated.Value(0)).current;
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -1097,16 +1104,18 @@ function BottomSheet({ onClose, title, children, inputBar, scrollable = false })
           </View>
 
           {scrollable ? (
-<ScrollView
-  style={{ flex: 1 }}
-  contentContainerStyle={{ paddingHorizontal: 12, paddingTop: 12, paddingBottom: 0 }}
-  keyboardShouldPersistTaps="handled"
-  nestedScrollEnabled
->
-  {children}
-</ScrollView>
+            <ScrollView
+              style={{ flex: 1 }}
+              contentContainerStyle={{ paddingHorizontal: 12, paddingTop: 12, paddingBottom: 0 }}
+              keyboardShouldPersistTaps="handled"
+              nestedScrollEnabled
+            >
+              {ready ? children : <ActivityIndicator style={{ marginTop: 30 }} color="#999" />}
+            </ScrollView>
           ) : (
-            <View style={{ flex: 1 }}>{children}</View>
+            <View style={{ flex: 1 }}>
+              {ready ? children : <ActivityIndicator style={{ marginTop: 30 }} color="#999" />}
+            </View>
           )}
           {inputBar}
         </Animated.View>

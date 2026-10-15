@@ -15,6 +15,9 @@ import {
   Dimensions,
   StyleSheet,
   FlatList,
+  InteractionManager,
+  ActivityIndicator,
+  
   Platform,
   PermissionsAndroid,
 } from "react-native";
@@ -31,7 +34,7 @@ import ShareSheet from "./ShareSheet";
 import CommentSection from "./CommentSection";
 import { useFollowStore } from "../../pages/Profile/UseFollowState";
 import { isPostSaved, toggleSavedPost, subscribeSavedPosts } from "../State/SavedPostStore";
-
+import { carouselTouchProps } from "../../components/carouselTouch";
 const API = Config.API_URL;
 const SCREEN_WIDTH = Dimensions.get("window").width;
 const SCREEN_HEIGHT = Dimensions.get("window").height;
@@ -127,7 +130,12 @@ function AnchoredMenu({ visible, coords, onClose, children }) {
   );
 }
 
-function BottomSheet({ title, onClose, children, inputBar, scrollViewRef }) {
+function BottomSheet({ title, onClose, children, inputBar, scrollViewRef, scrollable = true }) {
+    const [ready, setReady] = useState(false);
+  useEffect(() => {
+    const task = InteractionManager.runAfterInteractions(() => setReady(true));
+    return () => task.cancel();
+  }, []);
   const translateY = useRef(new Animated.Value(0)).current;
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -178,14 +186,20 @@ function BottomSheet({ title, onClose, children, inputBar, scrollViewRef }) {
             </View>
           </View>
 
-          <ScrollView
-            ref={scrollViewRef}
-            style={{ flex: 1 }}
-            keyboardShouldPersistTaps="handled"
-            nestedScrollEnabled
-          >
-            {children}
-          </ScrollView>
+{scrollable ? (
+  <ScrollView
+    ref={scrollViewRef}
+    style={{ flex: 1 }}
+    keyboardShouldPersistTaps="handled"
+    nestedScrollEnabled
+  >
+    {ready ? children : <ActivityIndicator style={{ marginTop: 30 }} color="#999" />}
+  </ScrollView>
+) : (
+  <View style={{ flex: 1 }}>
+    {ready ? children : <ActivityIndicator style={{ marginTop: 30 }} color="#999" />}
+  </View>
+)}
           {inputBar}
         </Animated.View>
       </KeyboardAvoidingView>
@@ -378,29 +392,33 @@ function MediaCarousel({ media, onDoubleTapLike }) {
 
   return (
     <View style={{ position: "relative", backgroundColor: "#000" }}>
-      <TouchableOpacity activeOpacity={1} onPress={handleTap}>
-        <ScrollView
-          horizontal
-          pagingEnabled
-          showsHorizontalScrollIndicator={false}
-          onMomentumScrollEnd={onMomentumScrollEnd}
-        >
-          {media.map((m, i) =>
-            m.type === "video" ? (
-              <Video
-                key={i}
-                source={{ uri: m.url }}
-                style={{ width: SCREEN_WIDTH, height: 460 }}
-                resizeMode="contain"
-                controls
-                paused={i !== current}
-              />
-            ) : (
-              <Image key={i} source={{ uri: m.url }} style={{ width: SCREEN_WIDTH, height: 460 }} resizeMode="cover" />
-            )
-          )}
-        </ScrollView>
+<ScrollView
+  horizontal
+  pagingEnabled
+  nestedScrollEnabled
+  directionalLockEnabled
+  scrollEventThrottle={16}
+  showsHorizontalScrollIndicator={false}
+  onMomentumScrollEnd={onMomentumScrollEnd}
+  {...carouselTouchProps}
+>
+  {media.map((m, i) =>
+    m.type === "video" ? (
+      <Video
+        key={i}
+        source={{ uri: m.url }}
+        style={{ width: SCREEN_WIDTH, height: 460 }}
+        resizeMode="contain"
+        controls
+        paused={i !== current}
+      />
+    ) : (
+      <TouchableOpacity key={i} activeOpacity={1} onPress={handleTap}>
+        <Image source={{ uri: m.url }} style={{ width: SCREEN_WIDTH, height: 460 }} resizeMode="cover" />
       </TouchableOpacity>
+    )
+  )}
+</ScrollView>
 
       {showBurst && (
         <View style={styles.burstOverlay} pointerEvents="none">
@@ -1294,6 +1312,7 @@ const onCollabResponded = ({ postId }) => {
 
       {showComments && (
         <BottomSheet
+        scrollable={false}
           title={`Comments (${formatCount(comments.length)})`}
           onClose={() => { setShowComments(false); setHighlightCommentId(null); setHighlightReplyId(null); }}
           scrollViewRef={commentsScrollRef}
@@ -1314,16 +1333,19 @@ const onCollabResponded = ({ postId }) => {
             </View>
           }
         >
-          <CommentSection
-            comments={comments}
-            setComments={setComments}
-            currentUser={currentUser}
-            postId={p._id}
-            postAuthorId={p.author?._id || p.author}
-            highlightCommentId={highlightCommentId}
-            highlightReplyId={highlightReplyId}
-            scrollRef={commentsScrollRef}
-          />
+         <View style={{ flex: 1, paddingHorizontal: 12 }}>
+  <CommentSection
+    comments={comments}
+    setComments={setComments}
+    currentUser={currentUser}
+    postId={p._id}
+    postAuthorId={p.author?._id || p.author}
+    highlightCommentId={highlightCommentId}
+    highlightReplyId={highlightReplyId}
+    scrollRef={commentsScrollRef}
+    fillParent
+  />
+</View>
         </BottomSheet>
       )}
 

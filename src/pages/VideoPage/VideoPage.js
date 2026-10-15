@@ -187,7 +187,6 @@ const fetchBlocked = useCallback(async () => {
   // stacking the instant every sheet closes.
   const handleSheetOpen = useCallback((open) => {
     setCommentsOpen(open);
-    setSheetOpen(open);
   }, []);
 
   return (
