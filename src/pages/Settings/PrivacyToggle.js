@@ -6,12 +6,15 @@ import {
   ActivityIndicator,
   Animated,
 } from "react-native";
+import { useNavigation } from "@react-navigation/native";
+import FeatherIcon from "react-native-vector-icons/Feather";
 import Config from "react-native-config";
 import { apiFetch } from "../../api/authToken"; // adjust relative path
 
 const API = Config.API_URL;
 
 function PrivacyToggle() {
+  const navigation = useNavigation();
   const [isPrivate, setIsPrivate] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -54,9 +57,20 @@ function PrivacyToggle() {
   // ── loading state — plain View, no dependency on the styles object
   // below (which is fine here since `styles` is a top-level constant,
   // not computed per-render off `isPrivate`) ──
+  const backButton = (
+    <TouchableOpacity
+      style={styles.backBtn}
+      onPress={() => navigation.goBack()}
+      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+    >
+      <FeatherIcon name="arrow-left" size={22} color="#111" />
+    </TouchableOpacity>
+  );
+
   if (loading) {
     return (
       <View style={styles.container}>
+        {backButton}
         <View style={styles.card}>
           <Text style={styles.title}>Privacy Settings</Text>
           <View style={styles.loadingWrap}>
@@ -69,6 +83,7 @@ function PrivacyToggle() {
 
   return (
     <View style={styles.container}>
+      {backButton}
       <View style={styles.card}>
         <Text style={styles.title}>Privacy Settings</Text>
 
@@ -115,6 +130,12 @@ function AnimatedToggle({ value, onToggle }) {
 }
 
 const styles = {
+  backBtn: {
+    position: "absolute",
+    top: 12,
+    left: 15,
+    zIndex: 10,
+  },
   container: {
     flex: 1,
     justifyContent: "center",

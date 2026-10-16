@@ -7,12 +7,15 @@ import {
   Animated,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useNavigation } from "@react-navigation/native";
+import FeatherIcon from "react-native-vector-icons/Feather";
 import Config from "react-native-config";
 import { apiFetch } from "../../api/authToken"; // adjust relative path
 
 const API = Config.API_URL;
 
 function NotificationSettings() {
+  const navigation = useNavigation();
   const [settings, setSettings] = useState({
     message: true,
     post: true,
@@ -74,9 +77,20 @@ function NotificationSettings() {
     }
   };
 
+  const backButton = (
+    <TouchableOpacity
+      style={styles.backBtn}
+      onPress={() => navigation.goBack()}
+      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+    >
+      <FeatherIcon name="arrow-left" size={22} color="#111" />
+    </TouchableOpacity>
+  );
+
   if (loading) {
     return (
       <View style={styles.container}>
+        {backButton}
         <View style={styles.card}>
           <Text style={styles.title}>Notification Settings</Text>
           <View style={styles.loadingWrap}>
@@ -89,6 +103,7 @@ function NotificationSettings() {
 
   return (
     <View style={styles.container}>
+      {backButton}
       <View style={styles.card}>
         <Text style={styles.title}>Notification Settings</Text>
 
@@ -143,6 +158,12 @@ function ToggleRow({ label, value, onToggle }) {
 const capitalize = (word) => word.charAt(0).toUpperCase() + word.slice(1);
 
 const styles = {
+  backBtn: {
+    position: "absolute",
+    top: 12,
+    left: 15,
+    zIndex: 10,
+  },
   container: {
     flex: 1,
     justifyContent: "center",

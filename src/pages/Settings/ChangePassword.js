@@ -10,6 +10,7 @@ import {
   Platform,
 } from "react-native";
 import { useNavigation } from "@react-navigation/native";
+import FeatherIcon from "react-native-vector-icons/Feather";
 import Config from "react-native-config";
 import { apiFetch } from "../../api/authToken"; // adjust relative path
 
@@ -155,6 +156,13 @@ function ChangePassword() {
       style={styles.container}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
+      <TouchableOpacity
+        style={styles.backBtn}
+        onPress={() => navigation.goBack()}
+        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+      >
+        <FeatherIcon name="arrow-left" size={22} color="#111" />
+      </TouchableOpacity>
       <View style={styles.card}>
         <Text style={styles.title}>Reset Password</Text>
 
@@ -299,6 +307,12 @@ function ChangePassword() {
 export default ChangePassword;
 
 const styles = {
+  backBtn: {
+    position: "absolute",
+    top: 12,
+    left: 15,
+    zIndex: 10,
+  },
   container: {
     flex: 1,
     justifyContent: "center",
