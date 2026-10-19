@@ -39,6 +39,9 @@ import Navbar, { subscribeTabReload, useSwipeToChangeTab, setCommentsOpen } from
 import socket from "../../sockets/Sockets";
 import CommentSection from "../../components/PostCard/CommentSection";
 import ShareSheet from "../../components/PostCard/ShareSheet";
+import SocialioNativeAd from "../../components/Ads/SocialioNativeAd";
+import { BannerAd, BannerAdSize } from "react-native-google-mobile-ads";
+import { AD_UNIT_IDS } from "../../components/Ads/AdConfig";
 import {
   useFollowStore,
   initFollowStore,
@@ -1549,8 +1552,9 @@ function PostFeedOverlay({ posts, startIndex, onClose, navigation, onFollowChang
           <Text style={{ fontWeight: "700", fontSize: 15 }}>Posts</Text>
         </View>
         <ScrollView style={{ flex: 1 }}>
-          {visiblePosts.map((p) =>
-            p.postType === "text" ? (
+          {visiblePosts.map((p, idx) => (
+            <React.Fragment key={p._id}>
+            {p.postType === "text" ? (
               <TextPostCard
                 key={p._id}
                 p={p}
@@ -1582,8 +1586,11 @@ function PostFeedOverlay({ posts, startIndex, onClose, navigation, onFollowChang
                 onOpenStory={onOpenStory}
                 onSheetOpen={onSheetOpen}
               />
-            )
-          )}
+            )}
+            {/* Image/video native ad after every 3rd post, same as Home */}
+            {(idx + 1) % 3 === 0 && <SocialioNativeAd />}
+            </React.Fragment>
+          ))}
         </ScrollView>
       </View>
     </View>
@@ -2253,13 +2260,28 @@ function GridVideoTile({ video, onPress, width, height }) {
   );
 }
 
+// Banner ad that fills the old "Ad space reserved" slot. Collapses to
+// nothing if the ad fails to load, so no empty gap is left behind.
+function ExploreBannerAd() {
+  const [failed, setFailed] = useState(false);
+  if (failed) return null;
+  return (
+    <View style={{ alignItems: "center", justifyContent: "center", paddingVertical: 6, backgroundColor: "#fff" }}>
+      <BannerAd
+        unitId={AD_UNIT_IDS.banner}
+        size={BannerAdSize.ANCHORED_ADAPTIVE_BANNER}
+        onAdFailedToLoad={(e) => {
+          console.log("[Socialio Ads] Explore banner failed:", e);
+          setFailed(true);
+        }}
+      />
+    </View>
+  );
+}
+
 function ExploreBlock({ block, onOpenPost, onOpenVideo }) {
   if (block.kind === "ad") {
-    return (
-      <View style={styles.adRow}>
-        <Text style={{ color: "#aaa", fontSize: 12, fontWeight: "600" }}>Ad space reserved</Text>
-      </View>
-    );
+    return <ExploreBannerAd />;
   }
 
   const { posts: blockPosts, video, reversed } = block;

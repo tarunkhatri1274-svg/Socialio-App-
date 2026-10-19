@@ -13,7 +13,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { apiFetch, getCachedUser } from "../../api/authToken"; // adjust relative path
 import Svg, { Path, Circle, Line } from "react-native-svg";
 import Config from "react-native-config";
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import { playAlertSound } from "./AlertSound"; // adjust path
 
 
@@ -101,6 +101,13 @@ const markRead = async (notificationId) => {
   await apiFetch(`${API}/auth/notifications/${notificationId}/read`, {
     method: "PATCH",
   });
+};
+
+// Safety net: marks everything read in one call. Also covers real-time
+// notifications that only have a client-side temp id (see the socket
+// handler), which the per-id endpoint can't mark.
+const markAllReadApi = async () => {
+  await apiFetch(`${API}/auth/notifications/read-all`, { method: "PATCH" });
 };
 
 const deleteNotificationApi = async (notificationId) => {
@@ -573,7 +580,12 @@ function ActivityPage() {
       loadPage(1);
     })();
   }, [loadPage]);
-
+  // Refetch whenever this tab comes into focus (e.g. opened from a push tap)
+  useFocusEffect(
+    useCallback(() => {
+      loadPage(1);
+    }, [loadPage])
+  );
   // NEW — tapping the already-active "Notifications" tab reloads this
   // screen (refetch page 1 + scroll to top) instead of doing nothing.
   useEffect(() => {
@@ -660,11 +672,28 @@ const handleNewNotification = (notif) => {
     if (loading) return;
     const toMark = notifications.filter((n) => !n.isRead && !markedReadRef.current.has(n._id));
     if (toMark.length === 0) return;
+    let needsMarkAll = false;
     toMark.forEach((n) => {
       markedReadRef.current.add(n._id);
+      // temp ids were invented client-side and don't exist in the DB
+      if (String(n._id).startsWith("temp-")) {
+        needsMarkAll = true;
+        return;
+      }
       markRead(n._id).catch(() => markedReadRef.current.delete(n._id));
     });
+    if (needsMarkAll) markAllReadApi().catch(() => {});
   }, [loading, notifications]);
+
+  // When the user leaves this tab, mark everything read once more so a
+  // notification that arrived right before the switch isn't left unread.
+  useFocusEffect(
+    useCallback(() => {
+      return () => {
+        markAllReadApi().catch(() => {});
+      };
+    }, [])
+  );
 
   const withPending = (id) => setPendingIds((prev) => new Set(prev).add(id));
   const clearPending = (id) =>

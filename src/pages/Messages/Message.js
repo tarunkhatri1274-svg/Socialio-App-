@@ -17,6 +17,7 @@ import {
   Dimensions,
   Platform,
   PermissionsAndroid,
+  Animated,
 } from "react-native";
 import Video from "react-native-video";
 import ReactNativeBlobUtil from "react-native-blob-util";
@@ -189,6 +190,43 @@ function GroupAvatarStack({ members, size = 46 }) {
       {tile(top, { top: 0, left: "25%", width: "50%", height: "52%" }, 0)}
       {tile(bl, { bottom: 0, left: 0, width: "50%", height: "48%" }, 1)}
       {tile(br, { bottom: 0, left: "50%", width: "50%", height: "48%" }, 2)}
+    </View>
+  );
+}
+
+/* ─── Typing indicator: three bouncing dots (matches the web version) ─── */
+function TypingDots() {
+  const anims = useRef([0, 1, 2].map(() => new Animated.Value(0))).current;
+
+  useEffect(() => {
+    const loops = anims.map((v, i) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(i * 200),
+          Animated.timing(v, { toValue: 1, duration: 300, useNativeDriver: true }),
+          Animated.timing(v, { toValue: 0, duration: 300, useNativeDriver: true }),
+          Animated.delay(400 - i * 200),
+        ])
+      )
+    );
+    loops.forEach(l => l.start());
+    return () => loops.forEach(l => l.stop());
+  }, [anims]);
+
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 4, height: 14 }}>
+      {anims.map((v, i) => (
+        <Animated.View
+          key={i}
+          style={{
+            width: 7,
+            height: 7,
+            borderRadius: 4,
+            backgroundColor: "#aaa",
+            transform: [{ translateY: v.interpolate({ inputRange: [0, 1], outputRange: [0, -6] }) }],
+          }}
+        />
+      ))}
     </View>
   );
 }
@@ -1282,6 +1320,8 @@ function ChatWindow({ conversation, currentUser, onClose, onlineUsers, onRequest
         if (prev.some(m => m._id === incomingId)) return prev;
         return [...prev, data.message || { _id: Date.now(), chatId, user: { _id: data.from }, text: data.text, createdAt: data.createdAt }];
       });
+       apiFetch(`${API}/messages/chat/${chatId}/seen`, { method: "POST" }).catch(() => {});
+
     };
     const onEdited = ({ chatId: cId, messageId, text }) => { if (cId !== chatId) return; setMessages(prev => prev.map(m => m._id === messageId ? { ...m, text, isEdited: true } : m)); };
     const onDeleted = ({ chatId: cId, messageId }) => { if (cId !== chatId) return; setMessages(prev => prev.filter(m => m._id !== messageId)); };
@@ -1481,7 +1521,7 @@ function ChatWindow({ conversation, currentUser, onClose, onlineUsers, onRequest
       <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 8, marginTop: 4 }}>
         <Avatar user={otherUser} size={28} />
         <View style={s.typingBubble}>
-          <ActivityIndicator size="small" color="#aaa" />
+          <TypingDots />
         </View>
       </View>
     ) : null
@@ -1917,18 +1957,24 @@ function Messages() {
 
   const handleGroupExited = () => loadGroups();
 
-  const closeChat = async () => {
-    await AsyncStorage.removeItem("openConv");
-    setOpenConv(null);
-    loadInbox();
-    loadRequests();
-  };
+const closeChat = async () => {
+  if (openConv?.chatId) {
+    await apiFetch(`${API}/messages/chat/${openConv.chatId}/seen`, { method: "POST" }).catch(() => {});
+  }
+  await AsyncStorage.removeItem("openConv");
+  setOpenConv(null);
+  loadInbox();
+  loadRequests();
+};
 
-  const closeGroupChat = async () => {
-    await AsyncStorage.removeItem("openConv");
-    setOpenConv(null);
-    loadGroups();
-  };
+const closeGroupChat = async () => {
+  if (openConv?.chatId) {
+    await apiFetch(`${API}/groups/${openConv.chatId}/seen`, { method: "POST" }).catch(() => {});
+  }
+  await AsyncStorage.removeItem("openConv");
+  setOpenConv(null);
+  loadGroups();
+};
 
   if (!currentUser) return null;
 

@@ -407,6 +407,10 @@ function Navbar() {
   const isVideoPage = route.name === "VideoPage";
   const isProfilePage = route.name === "Profile";
   const isNotificationsPage = route.name === "Notifications";
+  // The socket listener is registered once ([] deps), so it reads the
+  // current screen through a ref instead of a stale closure value.
+  const isNotificationsPageRef = useRef(isNotificationsPage);
+  isNotificationsPageRef.current = isNotificationsPage;
 
   useEffect(() => subscribeCommentsOpen(setLocalCommentsOpen), []);
 
@@ -453,6 +457,9 @@ function Navbar() {
     loadLatest();
 
     const handleNewNotification = (notif) => {
+      // Already on the notifications screen, which marks new arrivals as
+      // read itself — don't bump the badge/toast for something already read.
+      if (isNotificationsPageRef.current) return;
       if (!isNotifTypeAllowed(notif?.type, notif?.postType)) return;
 
       setUnreadCount((prev) => prev + 1);

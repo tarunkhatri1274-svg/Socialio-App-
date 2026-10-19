@@ -35,6 +35,7 @@ import {
 } from "react-native-webrtc";
 import { loadMutedMap, getMutedMap, subscribeMuted } from "../../components/State/MuteStore";
 import Config from "react-native-config";
+import SocialioNativeAd from '../../components/Ads/SocialioNativeAd';
 import { useNavigation, useIsFocused, useFocusEffect } from "@react-navigation/native";
 import { carouselTouchProps } from "../../components/carouselTouch";
 // These sibling files come from your project — convert/point them at their
@@ -3235,12 +3236,36 @@ const followingStories = useMemo(
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
   // Combined FlatList data: following posts, an "all caught up" divider, then discover posts
-  const feedData = useMemo(() => {
-    const arr = followingPosts.map((p) => ({ key: p._id, type: "post", post: p }));
-    if (followingPosts.length > 0 && discoverPosts.length > 0) arr.push({ key: "__divider__", type: "divider" });
-    arr.push(...discoverPosts.map((p) => ({ key: p._id, type: "post", post: p })));
-    return arr;
-  }, [followingPosts, discoverPosts]);
+
+const feedData = useMemo(() => {
+  const arr = [];
+  const addPostsWithAds = (sectionPosts, section) => {
+    sectionPosts.forEach((p, index) => {
+      arr.push({
+        key: p._id,
+        type: "post",
+        post: p,
+      });
+      // Add a native ad after every 4 posts.
+      if ((index + 1) % 4 === 0 && index < sectionPosts.length - 1) {
+        arr.push({
+          key: `native-ad-${section}-${index + 1}`,
+          type: "nativeAd",
+        });
+      }
+    });
+  };
+  addPostsWithAds(followingPosts, "following");
+  if (followingPosts.length > 0 && discoverPosts.length > 0) {
+    arr.push({
+      key: "__divider__",
+      type: "divider",
+    });
+  }
+  addPostsWithAds(discoverPosts, "discover");
+  return arr;
+}, [followingPosts, discoverPosts]);
+
 
   // Viewability tracking replaces the web IntersectionObserver-based autoplay
   const onViewableItemsChanged = useRef(({ viewableItems }) => {
@@ -3253,9 +3278,14 @@ const followingStories = useMemo(
   }).current;
   const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 60 }).current;
 
-  const renderItem = ({ item }) => {
-    if (item.type === "divider") return <AllCaughtUpDivider />;
-    const p = item.post;
+ const renderItem = ({ item }) => {
+  if (item.type === "divider") return <AllCaughtUpDivider />;
+
+  if (item.type === "nativeAd") {
+    return <SocialioNativeAd />;
+  }
+
+  const p = item.post;
     const props = {
       p,
       navigation,

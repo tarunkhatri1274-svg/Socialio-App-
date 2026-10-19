@@ -21,6 +21,7 @@ import {
   useWindowDimensions,
   InteractionManager,
   ActivityIndicator,
+  Keyboard,
 } from "react-native";
 import Video, { ViewType } from "react-native-video";
 import ReactNativeBlobUtil from "react-native-blob-util";
@@ -660,11 +661,46 @@ function CaptionText({ text, limit = 80 }) {
   );
 }
 
+// ── Input panel (Modal) ──────────────────────────────────────────────────
+// Add-tag / invite-collaborator editing happens in this panel instead of
+// inline inside the video card. It's a transparent Modal with the same
+// KeyboardAvoidingView pattern as the comments sheet, so it always sits
+// right above the keyboard on top of the (dimmed) video, with the author's
+// username row at the top — and the video list underneath is never resized
+// by the keyboard.
+function InputPanel({ visible, onClose, user, children }) {
+  if (!visible) return null;
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        style={{ flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.35)" }}
+      >
+        <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={onClose} />
+        <View style={{ backgroundColor: "#1c1c1c", borderTopLeftRadius: 18, borderTopRightRadius: 18, padding: 14, paddingBottom: 16 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 12 }}>
+            <Avatar src={user?.profilePic} username={user?.username} size={34} />
+            <Text style={{ color: "#fff", fontWeight: "700", fontSize: 15, flex: 1 }} numberOfLines={1}>
+              {user?.username}
+            </Text>
+            <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+              <FeatherIcon name="x" size={18} color="#ddd" />
+            </TouchableOpacity>
+          </View>
+          {children}
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
 // ── Tags Row ─────────────────────────────────────────────────────────────
-function TagsRow({ tags, postId, isOwner, onTagsUpdate }) {
+function TagsRow({ tags, postId, isOwner, onTagsUpdate, headerUser }) {
   const [tagInput, setTagInput] = useState("");
   const [showInput, setShowInput] = useState(false);
   const navigation = useNavigation();
+
+  const closePanel = () => { setShowInput(false); setTagInput(""); };
 
   const addTag = async () => {
     const t = tagInput.trim().toLowerCase().replace(/\s+/g, "_");
@@ -672,7 +708,7 @@ function TagsRow({ tags, postId, isOwner, onTagsUpdate }) {
     try {
       const res = await apiFetch(`${API}/auth/add-tag/${postId}`, { method: "PATCH", body: JSON.stringify({ tag: t }) });
       const data = await res.json();
-      if (data.success) { onTagsUpdate(data.tags); setTagInput(""); setShowInput(false); }
+      if (data.success) { onTagsUpdate(data.tags); closePanel(); }
     } catch {}
   };
 
@@ -719,32 +755,41 @@ function TagsRow({ tags, postId, isOwner, onTagsUpdate }) {
         </View>
       ))}
       {isOwner && (
-        showInput ? (
-          <View style={{ flexDirection: "row", gap: 4, alignItems: "center" }}>
-            <TextInput
-              value={tagInput} onChangeText={setTagInput}
-              onSubmitEditing={addTag}
-              placeholder="tag..." placeholderTextColor="rgba(255,255,255,0.5)"
-              autoFocus
-              style={{ borderWidth: 1, borderColor: "rgba(255,255,255,0.4)", backgroundColor: "rgba(0,0,0,0.3)", color: "#fff", borderRadius: 20, paddingHorizontal: 10, paddingVertical: 3, fontSize: 12, width: 80 }}
-            />
-            <TouchableOpacity onPress={addTag} style={S.addTagBtn}><Text style={{ color: "#fff" }}>+</Text></TouchableOpacity>
-            <TouchableOpacity onPress={() => setShowInput(false)}><FeatherIcon name="x" size={12} color="#ddd" /></TouchableOpacity>
-          </View>
-        ) : (
-          <TouchableOpacity onPress={() => setShowInput(true)} style={S.addTagBtn}><Text style={{ color: "#fff", fontSize: 12 }}>+ tag</Text></TouchableOpacity>
-        )
+        <TouchableOpacity onPress={() => setShowInput(true)} style={S.addTagBtn}>
+          <Text style={{ color: "#fff", fontSize: 12 }}>+ tag</Text>
+        </TouchableOpacity>
       )}
+
+      <InputPanel visible={showInput} onClose={closePanel} user={headerUser}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <TextInput
+            value={tagInput}
+            onChangeText={setTagInput}
+            onSubmitEditing={addTag}
+            placeholder="Add a tag..."
+            placeholderTextColor="rgba(255,255,255,0.5)"
+            autoFocus
+            autoCapitalize="none"
+            returnKeyType="done"
+            style={{ flex: 1, borderWidth: 1, borderColor: "rgba(255,255,255,0.4)", backgroundColor: "rgba(0,0,0,0.3)", color: "#fff", borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8, fontSize: 14 }}
+          />
+          <TouchableOpacity onPress={addTag} style={[S.addTagBtn, { paddingVertical: 8, paddingHorizontal: 16 }]}>
+            <Text style={{ color: "#fff", fontSize: 14, fontWeight: "600" }}>Add</Text>
+          </TouchableOpacity>
+        </View>
+      </InputPanel>
     </View>
   );
 }
 
 // ── Collaborators Row ────────────────────────────────────────────────────
-function CollabRow({ collaborators, postId, isOwner, onCollabUpdate }) {
+function CollabRow({ collaborators, postId, isOwner, onCollabUpdate, headerUser }) {
   const [search, setSearch] = useState("");
   const [results, setResults] = useState([]);
   const [showSearch, setShowSearch] = useState(false);
   const timer = useRef(null);
+
+  const closePanel = () => { setShowSearch(false); setSearch(""); setResults([]); };
 
   const handleSearch = (val) => {
     setSearch(val);
@@ -766,59 +811,68 @@ function CollabRow({ collaborators, postId, isOwner, onCollabUpdate }) {
     try {
       const res = await apiFetch(`${API}/auth/add-collaborator/${postId}`, { method: "PATCH", body: JSON.stringify({ userId }) });
       const data = await res.json();
-      if (data.success) { onCollabUpdate(data.collaborators); setSearch(""); setResults([]); setShowSearch(false); }
+      if (data.success) { onCollabUpdate(data.collaborators); closePanel(); }
       else if (data.message) Alert.alert(data.message);
     } catch {}
   };
 
   if (!isOwner) return null;
 
+  const visibleResults = results.filter(u => !collaborators.some(c => c.user?._id === u._id && c.status !== "declined"));
+
   return (
     <View style={{ marginTop: 8 }}>
-      {showSearch ? (
-        <View>
-          <View style={{ flexDirection: "row", gap: 6, alignItems: "center", borderWidth: 1, borderColor: "rgba(255,255,255,0.4)", backgroundColor: "rgba(0,0,0,0.3)", borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6 }}>
-            <FeatherIcon name="search" size={12} color="#ddd" />
-            <TextInput
-              value={search} onChangeText={handleSearch}
-              placeholder="Invite a collaborator..." placeholderTextColor="rgba(255,255,255,0.5)"
-              autoFocus
-              style={{ flex: 1, fontSize: 13, color: "#fff" }}
-            />
-            <TouchableOpacity onPress={() => { setShowSearch(false); setSearch(""); setResults([]); }}><FeatherIcon name="x" size={12} color="#ddd" /></TouchableOpacity>
-          </View>
-          {results.length > 0 && (
-            <View style={{ backgroundColor: "#1c1c1c", borderWidth: 1, borderColor: "rgba(255,255,255,0.15)", borderRadius: 10, marginTop: 4, overflow: "hidden" }}>
-              {results
-                .filter(u => !collaborators.some(c => c.user?._id === u._id && c.status !== "declined"))
-                .map(u => {
-                  const declined = collaborators.some(c => c.user?._id === u._id && c.status === "declined");
-                  return (
-                    <TouchableOpacity key={u._id} onPress={() => addCollab(u._id)}
-                      style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 12, paddingVertical: 8, borderBottomWidth: 0.5, borderBottomColor: "rgba(255,255,255,0.08)" }}>
-                      <Avatar src={u.profilePic} username={u.username} size={28} />
-                      <Text style={{ fontSize: 13, fontWeight: "600", color: "#fff" }}>{u.username}</Text>
-                      {declined && <Text style={{ fontSize: 11, color: "#999", marginLeft: "auto" }}>declined — invite again</Text>}
-                    </TouchableOpacity>
-                  );
-                })}
-            </View>
-          )}
-        </View>
-      ) : (
-        <TouchableOpacity onPress={() => setShowSearch(true)} style={[S.addTagBtn, { flexDirection: "row", alignItems: "center", gap: 4 }]}>
-          <FeatherIcon name="users" size={11} color="#fff" />
-          <Text style={{ color: "#fff", fontSize: 12 }}>+ invite collaborator</Text>
-        </TouchableOpacity>
-      )}
+      <TouchableOpacity onPress={() => setShowSearch(true)} style={[S.addTagBtn, { flexDirection: "row", alignItems: "center", gap: 4, alignSelf: "flex-start" }]}>
+        <FeatherIcon name="users" size={11} color="#fff" />
+        <Text style={{ color: "#fff", fontSize: 12 }}>+ invite collaborator</Text>
+      </TouchableOpacity>
+
       {collaborators.some(c => c.status === "pending") && (
         <Text style={{ fontSize: 11, color: "#bbb", marginTop: 8 }}>
           {collaborators.filter(c => c.status === "pending").map(c => c.user?.username).join(", ")} invited — waiting for them to accept.
         </Text>
       )}
+
+      <InputPanel visible={showSearch} onClose={closePanel} user={headerUser}>
+        {visibleResults.length > 0 && (
+          <ScrollView
+            style={{ maxHeight: 180, backgroundColor: "#262626", borderRadius: 10, marginBottom: 8 }}
+            keyboardShouldPersistTaps="handled"
+            nestedScrollEnabled
+          >
+            {visibleResults.map(u => {
+              const declined = collaborators.some(c => c.user?._id === u._id && c.status === "declined");
+              return (
+                <TouchableOpacity key={u._id} onPress={() => addCollab(u._id)}
+                  style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 12, paddingVertical: 8, borderBottomWidth: 0.5, borderBottomColor: "rgba(255,255,255,0.08)" }}>
+                  <Avatar src={u.profilePic} username={u.username} size={28} />
+                  <Text style={{ fontSize: 13, fontWeight: "600", color: "#fff" }}>{u.username}</Text>
+                  {declined && <Text style={{ fontSize: 11, color: "#999", marginLeft: "auto" }}>declined — invite again</Text>}
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        )}
+        <View style={{ flexDirection: "row", gap: 6, alignItems: "center", borderWidth: 1, borderColor: "rgba(255,255,255,0.4)", backgroundColor: "rgba(0,0,0,0.3)", borderRadius: 10, paddingHorizontal: 10, paddingVertical: 4 }}>
+          <FeatherIcon name="search" size={12} color="#ddd" />
+          <TextInput
+            value={search} onChangeText={handleSearch}
+            placeholder="Invite a collaborator..." placeholderTextColor="rgba(255,255,255,0.5)"
+            autoFocus
+            autoCapitalize="none"
+            style={{ flex: 1, fontSize: 14, color: "#fff" }}
+          />
+          {!!search && (
+            <TouchableOpacity onPress={() => { setSearch(""); setResults([]); }}>
+              <FeatherIcon name="x" size={12} color="#ddd" />
+            </TouchableOpacity>
+          )}
+        </View>
+      </InputPanel>
     </View>
   );
 }
+
 // ── Drag-down-to-close for bottom sheets (handle + header only) ─────────
 function useSheetDrag(onClose) {
   const translateY = useRef(new Animated.Value(0)).current;
@@ -1013,7 +1067,12 @@ function ProfileVideoCard({ p = {}, onBlock, onDeleted, isOwner, isVisible: isVi
       try {
         const res = await apiFetch(`${API}/auth/get-post/${p._id}`);
         const data = await res.json();
-        if (data.success) setCollaborators(data.post.collaborators ?? []);
+        if (data.success) {
+      setCollaborators(data.post.collaborators ?? []);
+      // The reels/profile list responses don't always include `tags`
+      // (Home's feed does), so pick them up from the full post too.
+      if (Array.isArray(data.post.tags)) setTags(data.post.tags);
+    }
       } catch {}
     };
     fetchCollaborators();
@@ -1438,7 +1497,7 @@ const videoSource = useMemo(
 
       {/* VIDEO */}
       <TouchableOpacity activeOpacity={1} style={S.videoBox} onPress={handleVideoTap}>
-<View style={S.video} pointerEvents="none">
+<View style={S.video} pointerEvents="none" collapsable={false}>
   <Video
     source={videoSource}
     style={S.video}
@@ -1446,26 +1505,28 @@ const videoSource = useMemo(
     repeat
     muted={muted}
     paused={paused || !isVisible}
-    
+    onError={(e) => console.log("[video error]", JSON.stringify(e))}
   />
 </View>
         <View style={S.overlay} pointerEvents="none" />
-{flashPause && (
-  <View style={S.flashWrap} pointerEvents="none">
-    <View
-      style={{
-        width: 90,
-        height: 90,
-        borderRadius: 45,
-        backgroundColor: "rgba(0,0,0,0.45)",
-        alignItems: "center",
-        justifyContent: "center",
-      }}
-    >
-      <FA5Icon name={paused ? "play" : "pause"} size={40} color="#fff" solid />
-    </View>
+<View
+  style={[S.flashWrap, { opacity: flashPause ? 1 : 0 }]}
+  pointerEvents="none"
+  collapsable={false}
+>
+  <View
+    style={{
+      width: 90,
+      height: 90,
+      borderRadius: 45,
+      backgroundColor: "rgba(0,0,0,0.45)",
+      alignItems: "center",
+      justifyContent: "center",
+    }}
+  >
+    <FA5Icon name={paused ? "play" : "pause"} size={40} color="#fff" solid />
   </View>
-)}
+</View>
         {showLikeBurst && (
           <Animated.View
             pointerEvents="none"
@@ -1576,8 +1637,8 @@ const videoSource = useMemo(
           onOpen={() => setShowLikers(true)}
         />
         <CaptionText text={caption} />
-        <TagsRow tags={tags} postId={p._id} isOwner={isOwner} onTagsUpdate={setTags} />
-        <CollabRow collaborators={collaborators} postId={p._id} isOwner={isOwner} onCollabUpdate={setCollaborators} />
+        <TagsRow tags={tags} postId={p._id} isOwner={isOwner} onTagsUpdate={setTags} headerUser={p?.author} />
+        <CollabRow collaborators={collaborators} postId={p._id} isOwner={isOwner} onCollabUpdate={setCollaborators} headerUser={p?.author} />
       </View>
 
       {/* LIKERS SHEET */}
@@ -1956,7 +2017,10 @@ const [activeIndex, setActiveIndex] = useState(initialIndex);
   style={{ flex: 1, backgroundColor: "#000" }}
   onLayout={(e) => {
     const h = Math.round(e.nativeEvent.layout.height);
-    if (h > 0 && h !== containerHeight) setContainerHeight(h);
+    // Only ever GROW (or set the first value). The soft keyboard shrinks this
+    // container; shrinking changed key={containerHeight} below, which remounted
+    // the FlatList and killed the focused TextInput (keyboard closed instantly).
+    if (h > 0 && h > containerHeight) setContainerHeight(h);
   }}
 >
       <TouchableOpacity onPress={() => navigation.goBack()} style={backBtnStyle}>
@@ -2021,8 +2085,8 @@ flashWrap: {
   ...StyleSheet.absoluteFillObject,
   alignItems: "center",
   justifyContent: "center",
-  zIndex: 15,
-  elevation: 15,
+  zIndex: 30,
+  elevation: 30,
 },
   rightActions: { position: "absolute", right: 12, bottom: 20, alignItems: "center", gap: 16, zIndex: 25 },
   actionBtn: { alignItems: "center", justifyContent: "center" },

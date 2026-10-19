@@ -1666,6 +1666,7 @@ export default function GroupChatWindow({ group: initialGroup, currentUser, onCl
     const onReceive = ({ chatId: cId, message }) => {
       if (cId !== chatId) return;
       setMessages(prev => prev.some(m => m._id === message._id) ? prev : [...prev, message]);
+       apiFetch(`${API}/groups/${chatId}/seen`, { method: "POST" }).catch(() => {});
     };
     const onJoined = ({ chatId: cId, message }) => {
       if (cId !== chatId) return;

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, useMemo } from "react";
 import {
   View,
   Text,
@@ -33,8 +33,12 @@ import {
   setRuntimeComments,
   setLikeState,
 } from "../State/SyncStoryStore";
+import SocialioVideoAd from "../Ads/SocialioVideoAd";
+import { AD_UNIT_IDS } from "../Ads/AdConfig";
 
 const API = Config.API_URL;
+// An image/video ad is shown after every N stories (authors) in the viewer.
+const STORIES_PER_AD = 2;
 const GOLDEN = "rgb(234,182,118)";
 const { height: SCREEN_H, width: SCREEN_W } = Dimensions.get("window");
 
@@ -289,8 +293,29 @@ function resolveInitialSlideIndex(stories, index, initialStoryId) {
   return idx >= 0 ? idx : 0;
 }
 
-function StoryViewer({ stories, index, close, currentUserId, initialStoryId = null, initialShowViewers = false }) {
+function StoryViewer({ stories: storiesProp, index, close, currentUserId, initialStoryId = null, initialShowViewers = false }) {
   const navigation = useNavigation();
+
+  // Ads are inserted as pseudo-stories after every STORIES_PER_AD real
+  // stories (never after the last one). An ad that can't load is added to
+  // failedAdIds and drops out of the list, moving straight to the next story.
+  const [failedAdIds, setFailedAdIds] = useState(() => new Set());
+  const [adLoaded, setAdLoaded] = useState(false);
+  const stories = useMemo(() => {
+    const out = [];
+    (storiesProp || []).forEach((s, i, arr) => {
+      out.push(s);
+      if ((i + 1) % STORIES_PER_AD === 0 && i < arr.length - 1) {
+        const adId = `ad-after-${s?.id ?? i}`;
+        if (!failedAdIds.has(adId)) {
+          out.push({ isAd: true, id: adId, adIndex: Math.floor(i / STORIES_PER_AD), slides: [{}] });
+        }
+      }
+    });
+    return out;
+  }, [storiesProp, failedAdIds]);
+  // `index` points into the original list; map it to the list with ads.
+  const startIndex = index === undefined ? index : index + Math.floor(index / STORIES_PER_AD);
   const [currentUser, setCurrentUser] = useState({});
   const [myId, setMyId] = useState(currentUserId ? currentUserId.toString() : null);
 
@@ -306,7 +331,7 @@ function StoryViewer({ stories, index, close, currentUserId, initialStoryId = nu
   }, []);
 
   const [authReady, setAuthReady] = useState(!!currentUserId);
-  const [current, setCurrent] = useState(index);
+  const [current, setCurrent] = useState(startIndex);
   // ← FIX — this used to always start at 0 and get corrected a moment
   // later by an effect once initialStoryId was resolved. That gap meant
   // this component's very first render (and everything that fires off
@@ -318,7 +343,7 @@ function StoryViewer({ stories, index, close, currentUserId, initialStoryId = nu
   // moment later. Resolving the correct index synchronously, before the
   // first render, means every one of those effects only ever sees the
   // right slide.
-  const [slideIndex, setSlideIndex] = useState(() => resolveInitialSlideIndex(stories, index, initialStoryId));
+  const [slideIndex, setSlideIndex] = useState(() => resolveInitialSlideIndex(stories, startIndex, initialStoryId));
   const [liked, setLiked] = useState(false);
   const [likesCount, setLikesCount] = useState(0);
   const [viewsCount, setViewsCount] = useState(0);
@@ -335,8 +360,8 @@ function StoryViewer({ stories, index, close, currentUserId, initialStoryId = nu
   // no Viewers sheet.
   const [showViewers, setShowViewers] = useState(() => {
     if (!initialShowViewers) return false;
-    const idx = resolveInitialSlideIndex(stories, index, initialStoryId);
-    const s = (stories?.[index]?.slides || [])[idx];
+    const idx = resolveInitialSlideIndex(stories, startIndex, initialStoryId);
+    const s = (stories?.[startIndex]?.slides || [])[idx];
     const isLive = s?.type === "live" || s?.isLive === true;
     return !isLive;
   });
@@ -372,6 +397,7 @@ const story = stories?.[current];
 const slides = story?.slides || [];
 const slide = slides[slideIndex] || {};
 const isOwn = story?.isOwn || (myId && story?.id?.toString() === myId);
+  const isAd = !!story?.isAd;
   const isLiveSlide = slide?.type === "live" || slide?.isLive === true;
   const isVideo = slide.type === "video" || slide.image?.includes(".mp4") || slide.image?.includes("video");
 
@@ -580,15 +606,20 @@ const isOwn = story?.isOwn || (myId && story?.id?.toString() === myId);
   }, [slide?.id]);
 
   // ── Progress bar via Animated.timing instead of setInterval + CSS width
+  // Ad pages start fresh (not loaded) every time the story changes.
+  useEffect(() => { setAdLoaded(false); }, [story?.id]);
+
   useEffect(() => {
     progressAnim.setValue(0);
     clearTimeout(timerRef.current);
     if (paused || accessDenied || isLiveSlide) return;
+    // Don't start the ad's timer until the ad has actually loaded.
+    if (isAd && !adLoaded) return;
 
-    const anim = Animated.timing(progressAnim, { toValue: 1, duration: 5000, useNativeDriver: false });
+    const anim = Animated.timing(progressAnim, { toValue: 1, duration: isAd ? 8000 : 5000, useNativeDriver: false });
     anim.start(({ finished }) => { if (finished) handleNext(); });
     return () => anim.stop();
-  }, [current, slideIndex, paused, accessDenied, isLiveSlide]);
+  }, [current, slideIndex, paused, accessDenied, isLiveSlide, story?.id, isAd, adLoaded]);
 
   useEffect(() => { setPaused(showMenu || showViewers || showShareSheet); }, [showMenu, showViewers, showShareSheet]);
 
@@ -659,6 +690,46 @@ const isOwn = story?.isOwn || (myId && story?.id?.toString() === myId);
   };
 
   const goToProfile = () => { if (story.id) navigation.navigate("UserProfile", { userId: story.id }); };
+
+  // ── Ad page (image or video native ad) shown between stories ──
+  if (isAd) {
+    return (
+      <Modal visible transparent={false} animationType="fade" onRequestClose={close}>
+        <View style={S.container}>
+          <View style={S.progressWrap}>
+            <View style={S.progressBg}>
+              <Animated.View
+                style={[S.progressFill, {
+                  width: progressAnim.interpolate({ inputRange: [0, 1], outputRange: ["0%", "100%"] }),
+                }]}
+              />
+            </View>
+          </View>
+
+          <SocialioVideoAd
+            key={story.id}
+            requireVideo={false}
+            // Alternates the image-focused and video-focused test units so
+            // both creative types get exercised; in production both resolve
+            // to your real native unit (which serves image and video).
+            unitId={story.adIndex % 2 === 0 ? AD_UNIT_IDS.native : AD_UNIT_IDS.nativeImage}
+            style={S.adPage}
+            onLoaded={() => setAdLoaded(true)}
+            onFailed={() => setFailedAdIds((prev) => new Set(prev).add(story.id))}
+          />
+
+          {/* Tap zones are limited to the upper-middle part of the screen so
+              the ad's call-to-action button at the bottom stays tappable. */}
+          <TouchableWithoutFeedback onPress={handlePrev}><View style={S.adNavLeft} /></TouchableWithoutFeedback>
+          <TouchableWithoutFeedback onPress={handleNext}><View style={S.adNavRight} /></TouchableWithoutFeedback>
+
+          <TouchableOpacity onPress={close} style={S.adClose}>
+            <IonIcon name="close" size={24} color="#fff" />
+          </TouchableOpacity>
+        </View>
+      </Modal>
+    );
+  }
 
    if (accessDenied && !isOwn) {
     return (
@@ -957,6 +1028,10 @@ const S = StyleSheet.create({
   username: { color: "#fff", fontSize: 14, fontWeight: "600" },
   timeText: { color: "rgba(255,255,255,0.65)", fontSize: 11 },
   closeBtn: { marginLeft: 4 },
+  adPage: { height: "100%" },
+  adNavLeft: { position: "absolute", left: 0, top: 70, width: "30%", height: "50%", zIndex: 5 },
+  adNavRight: { position: "absolute", right: 0, top: 70, width: "30%", height: "50%", zIndex: 5 },
+  adClose: { position: "absolute", top: 20, left: 12, zIndex: 10, padding: 4 },
   navLeft: { position: "absolute", left: 0, top: 0, width: "40%", height: "100%", zIndex: 5 },
   navRight: { position: "absolute", right: 0, top: 0, width: "60%", height: "100%", zIndex: 5 },
   bottom: { position: "absolute", bottom: 0, left: 0, right: 0, zIndex: 10, paddingHorizontal: 14, paddingBottom: 32 },

@@ -21,7 +21,7 @@ export async function playAlertSound({ title, body } = {}) {
           // bar icon later (see note below) — the launcher icon works but
           // may render as a solid block/wrong color in the status bar on
           // some Android versions.
-          smallIcon: "ic_stat_notify",
+          smallIcon: "ic_launcher",
           pressAction: { id: "default" },
           autoCancel: true,
         },

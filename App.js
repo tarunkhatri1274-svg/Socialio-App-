@@ -14,7 +14,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 // NEW — needed for MainTabs below. Install if not already present:
 //   npm install @react-navigation/bottom-tabs
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-
+import mobileAds from 'react-native-google-mobile-ads';
 import { CallProvider } from './src/components/Context/CallContext';
 import { AuthProvider, useAuth, getAuthToken, setUnauthorizedHandler } from './src/api/authToken'; // adjust path if authToken.js lives elsewhere
 import { initSocket } from './src/sockets/Sockets';
@@ -35,7 +35,7 @@ import { FilterCaptureHost } from './src/components/PostCard/CropImage';
 // registration with the backend. Only called once a token already
 // exists in AsyncStorage (i.e. the user is logged in), same gate as
 // initSocket() right below it.
-import { initPushNotifications, requestNotificationPermission } from './src/pages/Activity/PushNotifications'
+import { initPushNotifications } from './src/pages/Activity/PushNotifications'
 
 /* ── Splash — new. Shown for ~2.5s on cold start and decides whether
    to land on AuthPage or skip straight into MainTabs, based on
@@ -91,7 +91,13 @@ import ChangePassword from './src/pages/Settings/ChangePassword';
 import PrivacyToggle from './src/pages/Settings/PrivacyToggle';
 import NotificationSettings from './src/pages/Settings/NotificationSettings';
 import BlockedAccounts from './src/pages/Settings/BlockedAccounts';
-
+import { getApp } from '@react-native-firebase/app';
+import {
+  getMessaging,
+  onNotificationOpenedApp,
+  getInitialNotification,
+} from '@react-native-firebase/messaging';
+import notifee, { EventType } from '@notifee/react-native';
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
@@ -100,7 +106,30 @@ const Tab = createBottomTabNavigator();
 // trigger navigation — this is the standard React Navigation pattern
 // for navigating from outside the component tree.
 const navigationRef = createNavigationContainerRef();
+// ── Open the Notifications tab when a push notification is tapped.
+// If the app was killed, the tap happens before navigation is ready
+// (and Splash is still showing), so we remember the request and run it
+// as soon as the user is past the Splash/Auth screens.
+let pendingOpenNotifications = false;
+const NOT_READY_ROUTES = [
+  'Splash', 'AuthPage', 'Login', 'ForgotPassword', 'ForgotPasswordOtp',
+  'ResetPassword', 'VerifyEmail', 'VerifyOtp', 'RegisterUser',
+];
 
+function tryOpenNotifications() {
+  if (!pendingOpenNotifications) return;
+  if (!navigationRef.isReady()) return;
+  const route = navigationRef.getCurrentRoute()?.name;
+  if (!route || NOT_READY_ROUTES.includes(route)) return;
+
+  pendingOpenNotifications = false;
+  navigationRef.navigate('MainTabs', { screen: 'Notifications' });
+}
+
+function openNotificationsFromPush() {
+  pendingOpenNotifications = true;
+  tryOpenNotifications();
+}
 // ── MainTabs ──────────────────────────────────────────────────
 // Home / Search / Notifications / Messages / VideoPage / Profile used
 // to be six separate <Stack.Screen>s living in the SAME flat stack as
@@ -174,7 +203,16 @@ function AppInner() {
       setStoresReady(true);
     })();
   }, []);
-
+useEffect(() => {
+  mobileAds()
+    .initialize()
+    .then(() => {
+      console.log('[AdMob] SDK initialized');
+    })
+    .catch(error => {
+      console.warn('[AdMob] Initialization failed:', error);
+    });
+}, []);
   // Wired once: whenever apiFetch (in authToken.js) gets a 401 that a
   // refresh-token retry can't fix, it clears AsyncStorage and calls
   // this — so we sync AuthContext's state and kick the user back to
@@ -191,30 +229,44 @@ function AppInner() {
   useEffect(() => {
     (async () => {
       try {
-        // If a token already exists (returning user who never logged
-        // out), connect the socket here too — Login.js only handles
-        // the fresh-login case, this handles app-reopen/cold-start.
-        // NOTE: SplashScreen also reads AsyncStorage on its own, in
-        // parallel, to decide which route to land on — that's a
-        // separate, intentionally duplicated read so Splash doesn't
-        // have to wait on this effect or on CallProvider at all.
         const token = await getAuthToken();
         if (token) {
           await initSocket();
-          // Push notification permission + Android channel + FCM
-          // token registration. Same gate as initSocket() — only for
-          // an already-logged-in / returning user. Login.js and
-          // RegisterUser.js should call this too right after they set
-          // the token, so a brand-new login/signup also registers for
-          // push without needing an app restart.
-          const granted = await requestNotificationPermission();
-          console.log('[push] notification permission granted:', granted);
+          // Permission + Android channel + FCM token registration.
+          // (initPushNotifications asks for permission itself.)
           await initPushNotifications();
+          console.log('[push] initPushNotifications finished');
         }
-      } catch {
-        // AuthContext already defaults to token: null, user: {} on failure
+      } catch (e) {
+        console.log('[push] init error:', e?.message);
       }
     })();
+  }, []);
+    useEffect(() => {
+    const messaging = getMessaging(getApp());
+
+    // App was in the background and the user tapped the push
+    const unsubOpened = onNotificationOpenedApp(messaging, () => {
+      openNotificationsFromPush();
+    });
+
+    // App was killed and was opened by tapping the push
+    getInitialNotification(messaging).then((msg) => {
+      if (msg) openNotificationsFromPush();
+    });
+
+    // In-app alerts shown by notifee (AlertSound.js) while app is running
+    const unsubNotifee = notifee.onForegroundEvent(({ type }) => {
+      if (type === EventType.PRESS) openNotificationsFromPush();
+    });
+    notifee.getInitialNotification().then((initial) => {
+      if (initial) openNotificationsFromPush();
+    });
+
+    return () => {
+      unsubOpened();
+      unsubNotifee();
+    };
   }, []);
 
   // All hooks are declared above, so this early return is safe.
@@ -225,7 +277,11 @@ function AppInner() {
       <SafeAreaProvider>
         <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
         <CallProvider currentUser={currentUser}>
-          <NavigationContainer ref={navigationRef}>
+          <NavigationContainer
+  ref={navigationRef}
+  onReady={tryOpenNotifications}
+  onStateChange={tryOpenNotifications}
+>
             <Stack.Navigator
               initialRouteName="Splash"
               screenOptions={{ headerShown: false }}

@@ -1,8 +1,9 @@
 import React, { useEffect, useState, useCallback, useRef } from "react";
-import { View, FlatList, Dimensions, StyleSheet } from "react-native";
+import { View, FlatList, Dimensions, StyleSheet, Keyboard } from "react-native";
 
 import Config from "react-native-config";
 import Videopost from "../../components/PostCard/Video";
+import SocialioVideoAd from "../../components/Ads/SocialioVideoAd";
 import Navbar, { setCommentsOpen, subscribeTabReload, useSwipeToChangeTab } from "../../components/Navbar/Navbar";
 import socket from "../../sockets/Sockets";
 import { useRoute } from "@react-navigation/native";
@@ -38,6 +39,15 @@ const [myId, setMyId] = useState(null);
   // claims a touch that starts as a vertical pan itself, and only a
   // clearly-horizontal drag that nothing else claimed reaches this).
   const { panHandlers: swipePanHandlers } = useSwipeToChangeTab({ capture: false });
+
+  // Hide the Navbar while the keyboard is up so it can't float over the
+  // tag / collaborator inputs (window resizes and lifts the Navbar above the keyboard).
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  useEffect(() => {
+    const show = Keyboard.addListener("keyboardDidShow", () => setKeyboardVisible(true));
+    const hide = Keyboard.addListener("keyboardDidHide", () => setKeyboardVisible(false));
+    return () => { show.remove(); hide.remove(); };
+  }, []);
 
   const route = useRoute();
   const hasNavbar = route.params?.hasNavbar ?? true;
@@ -166,6 +176,26 @@ const fetchBlocked = useCallback(async () => {
     return true;
   });
 
+  // Video-only ad after every 3 videos. A slot that can't load a video
+  // creative reports back and is dropped from the list.
+  const VIDEOS_PER_AD = 3;
+  const [failedAdIds, setFailedAdIds] = useState(() => new Set());
+  const handleAdFailed = useCallback((adId) => {
+    setFailedAdIds((prev) => (prev.has(adId) ? prev : new Set(prev).add(adId)));
+  }, []);
+
+  const feedItems = React.useMemo(() => {
+    const out = [];
+    visibleVideos.forEach((v, i) => {
+      out.push(v);
+      if ((i + 1) % VIDEOS_PER_AD === 0 && i < visibleVideos.length - 1) {
+        const adId = `ad-after-${v._id}`;
+        if (!failedAdIds.has(adId)) out.push({ _id: adId, isAd: true });
+      }
+    });
+    return out;
+  }, [visibleVideos, failedAdIds]);
+
   // Viewability tracking replaces the web version's scroll-snap-driven
   // "one video visible at a time" behavior — drives each Videopost's
   // isVisible prop for autoplay/pause, same pattern as Homepage.js's
@@ -194,9 +224,14 @@ const fetchBlocked = useCallback(async () => {
 <FlatList
 ref={videoListRef}
 key={focusKey}
-  data={visibleVideos}
+  data={feedItems}
+  extraData={visibleVideoIds}
   keyExtractor={(post) => post._id}
-  renderItem={({ item }) => (
+  renderItem={({ item }) => item.isAd ? (
+    <View style={{ height: SCREEN_HEIGHT, width: "100%" }}>
+      <SocialioVideoAd onFailed={() => handleAdFailed(item._id)} />
+    </View>
+  ) : (
     <View style={{ height: SCREEN_HEIGHT, width: "100%" }}>
 <Videopost
   p={item}
@@ -225,7 +260,7 @@ key={focusKey}
   style={{ zIndex: 0 }}
 />
 
-      {hasNavbar && (
+      {hasNavbar && !keyboardVisible && (
         // FIX: wrapper controls stacking of Navbar relative to the
         // FlatList above (its sibling here) — zIndex -1 while any sheet
         // is open drops it behind the FlatList's content/Modals, and it

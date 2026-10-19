@@ -136,7 +136,7 @@ export async function testNotification() {
       body: "If you hear this, notification sound works.",
       android: {
         channelId: "socialio-test-v2",
-        smallIcon: "ic_stat_notify",
+        smallIcon: "ic_launcher",
         pressAction: {
           id: "default",
         },

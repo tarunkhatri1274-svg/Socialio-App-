@@ -38,6 +38,8 @@ import { useNavigation, useRoute, useIsFocused } from "@react-navigation/native"
 import socket from "../../sockets/Sockets";
 import CommentSection from "../../components/PostCard/CommentSection";
 import ShareSheet from "../../components/PostCard/ShareSheet";
+// Lives in src/components/Ads/
+import SocialioVideoAd from "../../components/Ads/SocialioVideoAd";
 import { useFollowStore, initFollowStore, addFollowing, removeFollowing } from "../Profile/UseFollowState";
 import {
   getStoryRuntime,
@@ -98,15 +100,26 @@ function shareCount(shares) {
 function useAnchoredMenu() {
   const anchorRef = useRef(null);
   const [visible, setVisible] = useState(false);
-  const [coords, setCoords] = useState({ y: 0 });
+  const [coords, setCoords] = useState({ y: 0, top: 0 });
+  const [menuHeight, setMenuHeight] = useState(0);
   const open = () => {
     anchorRef.current?.measureInWindow((x, y, width, height) => {
-      setCoords({ y: y + height });
+      setCoords({ y: y + height, top: y });
+      setMenuHeight(0); // re-measure every time the menu opens
       setVisible(true);
     });
   };
   const close = () => setVisible(false);
-  return { anchorRef, visible, coords, open, close };
+  // Menu opens UPWARD: its bottom edge sits just above the ⋮ button.
+  // Hidden (opacity 0) for the single frame before onLayout reports its height.
+  const onMenuLayout = (e) => setMenuHeight(e.nativeEvent.layout.height);
+  const upwardStyle = {
+    position: "absolute",
+    top: Math.max(8, coords.top - menuHeight - 8),
+    right: 60,
+    opacity: menuHeight ? 1 : 0,
+  };
+  return { anchorRef, visible, coords, open, close, onMenuLayout, upwardStyle };
 }
 
 function Avatar({ src, username, size = 35, style: extra, onPress }) {
@@ -431,6 +444,24 @@ function CollabRow({ collaborators, postId, isOwner, onCollabUpdate }) {
     <View style={{ marginTop: 8 }}>
       {showSearch ? (
         <View>
+          {results.length > 0 && (
+            <ScrollView style={[S.collabResults, { marginTop: 0, marginBottom: 4, maxHeight: 132 }]} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
+              {results
+                .filter((u) => !collaborators.some((c) => c.user?._id === u._id && c.status !== "declined"))
+                .map((u) => {
+                  const declined = collaborators.some((c) => c.user?._id === u._id && c.status === "declined");
+                  return (
+                    <TouchableOpacity key={u._id} onPress={() => addCollab(u._id)} style={S.collabResultRow}>
+                      <Avatar src={u.profilePic} username={u.username} size={28} />
+                      <Text style={{ fontSize: 13, fontWeight: "600", color: "#fff" }}>{u.username}</Text>
+                      {declined && (
+                        <Text style={{ fontSize: 11, color: "#999", marginLeft: "auto" }}>declined — invite again</Text>
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+            </ScrollView>
+          )}
           <View style={S.collabSearchWrap}>
             <FeatherIcon name="search" size={12} color="#ddd" />
             <TextInput
@@ -451,24 +482,6 @@ function CollabRow({ collaborators, postId, isOwner, onCollabUpdate }) {
               <FeatherIcon name="x" size={12} color="#ddd" />
             </TouchableOpacity>
           </View>
-          {results.length > 0 && (
-            <View style={S.collabResults}>
-              {results
-                .filter((u) => !collaborators.some((c) => c.user?._id === u._id && c.status !== "declined"))
-                .map((u) => {
-                  const declined = collaborators.some((c) => c.user?._id === u._id && c.status === "declined");
-                  return (
-                    <TouchableOpacity key={u._id} onPress={() => addCollab(u._id)} style={S.collabResultRow}>
-                      <Avatar src={u.profilePic} username={u.username} size={28} />
-                      <Text style={{ fontSize: 13, fontWeight: "600", color: "#fff" }}>{u.username}</Text>
-                      {declined && (
-                        <Text style={{ fontSize: 11, color: "#999", marginLeft: "auto" }}>declined — invite again</Text>
-                      )}
-                    </TouchableOpacity>
-                  );
-                })}
-            </View>
-          )}
         </View>
       ) : (
         <TouchableOpacity onPress={() => setShowSearch(true)} style={[S.addTagBtn, { flexDirection: "row", alignItems: "center", gap: 4, alignSelf: "flex-start" }]}>
@@ -1305,7 +1318,12 @@ const isDownloadingRef = useRef(false);
       try {
         const res = await apiFetch(`${API}/auth/get-post/${p._id}`);
         const data = await res.json();
-        if (data.success) setCollaborators(data.post.collaborators ?? []);
+        if (data.success) {
+      setCollaborators(data.post.collaborators ?? []);
+      // The reels/profile list responses don't always include `tags`
+      // (Home's feed does), so pick them up from the full post too.
+      if (Array.isArray(data.post.tags)) setTags(data.post.tags);
+    }
       } catch {}
     };
     fetchCollaborators();
@@ -1809,7 +1827,7 @@ const isDownloadingRef = useRef(false);
             {menu.visible && (
               <Modal transparent visible={menu.visible} animationType="fade" onRequestClose={menu.close}>
                 <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={menu.close}>
-                  <View style={[S.menu, { position: "absolute", top: menu.coords.y, right: 60 }]}>
+                  <View style={[S.menu, menu.upwardStyle]} onLayout={menu.onMenuLayout}>
                     {menuOptions.map((opt, i) => (
                       <TouchableOpacity
                         key={opt.key}
@@ -1864,8 +1882,7 @@ const isDownloadingRef = useRef(false);
           />
           <CaptionText text={caption} />
 
-          <TagsRow tags={tags} postId={p._id} isOwner={isOwner} onTagsUpdate={setTags} />
-          <CollabRow collaborators={collaborators} postId={p._id} isOwner={isOwner} onCollabUpdate={setCollaborators} />
+          <TagsRow tags={tags} postId={p._id} isOwner={false} onTagsUpdate={setTags} />
         </View>
       </View>
 
@@ -2177,6 +2194,26 @@ function ExploreReels() {
     if (visibleVideos.length === 0) navigation.goBack();
   }, [visibleVideos.length]);
 
+  // Video-only ad after every 3 reels. If an ad slot can't load a video
+  // creative it reports back and is removed from the list.
+  const REELS_PER_AD = 3;
+  const [failedAdIds, setFailedAdIds] = useState(() => new Set());
+  const handleAdFailed = useCallback((adId) => {
+    setFailedAdIds((prev) => (prev.has(adId) ? prev : new Set(prev).add(adId)));
+  }, []);
+
+  const feedItems = React.useMemo(() => {
+    const out = [];
+    visibleVideos.forEach((v, i) => {
+      out.push(v);
+      if ((i + 1) % REELS_PER_AD === 0 && i < visibleVideos.length - 1) {
+        const adId = `ad-after-${v._id}`;
+        if (!failedAdIds.has(adId)) out.push({ _id: adId, isAd: true });
+      }
+    });
+    return out;
+  }, [visibleVideos, failedAdIds]);
+
   // Replaces the web version's per-card IntersectionObserver — FlatList
   // tells us which item is currently ≥60% visible, and only that card
   // gets isVisible=true (and therefore actually plays its video).
@@ -2199,7 +2236,8 @@ function ExploreReels() {
         </View>
       ) : (
 <FlatList
-  data={visibleVideos}
+  data={feedItems}
+  extraData={visibleId}
   keyExtractor={(item) => item._id}
   pagingEnabled
   showsVerticalScrollIndicator={false}
@@ -2208,7 +2246,12 @@ function ExploreReels() {
   viewabilityConfig={viewabilityConfig}
   onViewableItemsChanged={onViewableItemsChanged}
   getItemLayout={(_, index) => ({ length: SCREEN_HEIGHT, offset: SCREEN_HEIGHT * index, index })}
-  renderItem={({ item: post }) => (
+  renderItem={({ item: post }) =>
+    post.isAd ? (
+      <View style={{ height: SCREEN_HEIGHT }}>
+        <SocialioVideoAd onFailed={() => handleAdFailed(post._id)} />
+      </View>
+    ) : (
     <View style={{ height: SCREEN_HEIGHT }}>
       <ExploreReelCard
         p={post}
@@ -2219,7 +2262,8 @@ function ExploreReels() {
         onFollowChange={handleFollowChange}
       />
     </View>
-  )}
+    )
+  }
   initialNumToRender={2}
   maxToRenderPerBatch={2}
   windowSize={3}
@@ -2271,9 +2315,9 @@ const S = StyleSheet.create({
   },
   menuItem: { paddingVertical: 13, paddingHorizontal: 18, borderBottomWidth: 1, borderBottomColor: "rgba(255,255,255,0.1)" },
   bottomBar: { position: "absolute", left: 0, right: 70, bottom: 0, padding: 16, zIndex: 20 },
-  userRow: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 8 },
+  userRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 10, rowGap: 6, marginBottom: 8 },
   username: { color: "#fff", fontWeight: "700", fontSize: 16 },
-  followBtnOutline: { borderWidth: 1, borderColor: "#fff", paddingHorizontal: 16, paddingVertical: 6, borderRadius: 10 },
+  followBtnOutline: { borderWidth: 1, borderColor: "#fff", paddingHorizontal: 16, paddingVertical: 6, borderRadius: 10, flexShrink: 0 },
   followBtn: {},
   caption: { color: "#fff", fontSize: 14, lineHeight: 19 },
   likesSummary: { color: "#fff", fontSize: 13, marginBottom: 4 },

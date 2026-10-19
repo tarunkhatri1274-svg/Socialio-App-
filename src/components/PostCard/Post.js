@@ -1446,26 +1446,60 @@ function Post() {
     }
   }, [postsList.length]);
 
+  // Top-left back button — returns to whichever screen opened this post
+  // (ProfilePage, UserProfileView or SavedPage). Falls back to the Profile
+  // tab (nested inside MainTabs) only if there's nothing to go back to,
+  // e.g. when opened from a notification with no history.
+  const handleBack = () => {
+    if (navigation.canGoBack()) {
+      navigation.goBack();
+    } else {
+      navigation.navigate("MainTabs", { screen: "Profile" });
+    }
+  };
+
+  const backBar = (
+    <View style={styles.topBar}>
+      <TouchableOpacity
+        onPress={handleBack}
+        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+      >
+        <FeatherIcon name="arrow-left" size={22} color="#111" />
+      </TouchableOpacity>
+      <Text style={styles.topBarTitle}>PostCard</Text>
+      <View style={{ width: 22 }} />
+    </View>
+  );
+
   if (loading) {
     return (
-      <View style={styles.centered}>
-        <Text style={{ color: "#aaa", fontSize: 18 }}>Loading post...</Text>
+      <View style={{ flex: 1, backgroundColor: "#fff" }}>
+        {backBar}
+        <View style={styles.centered}>
+          <Text style={{ color: "#aaa", fontSize: 18 }}>Loading post...</Text>
+        </View>
       </View>
     );
   }
 
   if (!post || notFound) {
     return (
-      <View style={styles.centered}>
-        <Text style={{ color: "#aaa", fontSize: 18 }}>No post found</Text>
+      <View style={{ flex: 1, backgroundColor: "#fff" }}>
+        {backBar}
+        <View style={styles.centered}>
+          <Text style={{ color: "#aaa", fontSize: 18 }}>No post found</Text>
+        </View>
       </View>
     );
   }
 if (!statePost) {
   return (
-    <ScrollView ref={scrollRef}>
-      <PostCard p={post} onDeleted={handlePostDeleted} pendingSheet={pendingSheet} />
-    </ScrollView>
+    <View style={{ flex: 1, backgroundColor: "#fff" }}>
+      {backBar}
+      <ScrollView ref={scrollRef}>
+        <PostCard p={post} onDeleted={handlePostDeleted} pendingSheet={pendingSheet} />
+      </ScrollView>
+    </View>
   );
 }
 
@@ -1474,6 +1508,8 @@ const currentIndex = postsList.findIndex((item) => idOf(item) === idOf(post));
 const ESTIMATED_ITEM_HEIGHT = 600; // rough avg height of a PostCard — tune to taste
 
 return (
+  <View style={{ flex: 1, backgroundColor: "#fff" }}>
+  {backBar}
   <FlatList
     ref={scrollRef}
     data={postsList}
@@ -1498,6 +1534,7 @@ return (
       <PostCard p={p} onDeleted={handlePostDeleted} pendingSheet={pendingSheet} />
     )}
   />
+  </View>
 );
 }
 
@@ -1506,6 +1543,17 @@ export { PostCard };
 
 /* ─────────────────────────── Styles ─────────────────────────── */
 const styles = StyleSheet.create({
+  topBar: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 12,
+    paddingHorizontal: 15,
+    backgroundColor: "#fff",
+    borderBottomWidth: 1,
+    borderBottomColor: "#eee",
+  },
+  topBarTitle: { fontSize: 16, fontWeight: "700", color: "#111" },
   card: { backgroundColor: "#fff", borderBottomWidth: 8, borderBottomColor: "#f5f5f5" },
   header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 10, paddingHorizontal: 12 },
   userInfo: { flexDirection: "row", gap: 10, alignItems: "center", flexShrink: 1 },
