@@ -632,9 +632,13 @@ function FollowButton({ authorId, isPrivate, isOwner, isBlocked, onFollowChange,
     </TouchableOpacity>
   );
 }
-
+function getSlideCaption(p, index) {
+  const m = p?.media?.[index];
+  if (m && typeof m.caption === "string") return m.caption;
+  return p?.caption || p?.text || "";
+}
 /* ─────────────────────────── FeedCarousel (swipeable multi-image) ─────────────────────────── */
-function FeedCarousel({ media, onOpen, cardWidth }) {
+function FeedCarousel({ media, onOpen, cardWidth, onIndexChange }) {
   const [current, setCurrent] = useState(0);
   const total = media?.length || 0;
   if (!total) return null;
@@ -643,7 +647,9 @@ function FeedCarousel({ media, onOpen, cardWidth }) {
 
   const onMomentumScrollEnd = (e) => {
     const idx = Math.round(e.nativeEvent.contentOffset.x / width);
-    setCurrent(Math.max(0, Math.min(idx, total - 1)));
+    const next = Math.max(0, Math.min(idx, total - 1));
+    setCurrent(next);
+    onIndexChange?.(next);
   };
 
   return (
@@ -752,7 +758,8 @@ const isDownloadingRef = useRef(false);
   const [removedFromView, setRemovedFromView] = useState(false);
   const [showHeartBurst, setShowHeartBurst] = useState(false);
   const [collaborators, setCollaborators] = useState(p?.collaborators ?? []);
-
+    const [slideIndex, setSlideIndex] = useState(0);
+  const slideCaption = getSlideCaption(p, slideIndex);
   useEffect(() => {
     if (showLikers || showComments || showShare) {
       setCommentsOpen(true);
@@ -1056,7 +1063,7 @@ const isDownloadingRef = useRef(false);
         </View>
 
         <View style={{ position: "relative" }}>
-  <FeedCarousel media={p.media} onOpen={handleMediaTap} />
+      <FeedCarousel media={p.media} onOpen={handleMediaTap} onIndexChange={setSlideIndex} />
   <HeartBurst show={showHeartBurst} />
 </View>
 
@@ -1068,12 +1075,12 @@ const isDownloadingRef = useRef(false);
           onOpen={() => setShowLikers(true)}
         />
 
-        {(p?.caption || p?.text) && (
+        {!!slideCaption && (
           <Text style={styles.caption}>
             <Text style={{ fontWeight: "700" }} onPress={() => goToProfile(authorId)}>
               {username}{"  "}
             </Text>
-            <CaptionText text={p?.caption || p?.text} />
+            <CaptionText key={slideIndex} text={slideCaption} />
           </Text>
         )}
 

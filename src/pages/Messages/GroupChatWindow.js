@@ -36,7 +36,7 @@ import { ChatBubbleSkeleton } from "../../components/Skeleton/Skeleton";
 
 const API = Config.API_URL;
 const GOLDEN = "rgb(234,182,118)";
-const CLOUDINARY_URL = Config.CLOUDINARY_URL;
+
 const apiFetch = async (url, options = {}) => {
   // Uses the shared apiFetch from authToken.js so an expired token is
   // refreshed automatically on a 401 instead of just throwing.

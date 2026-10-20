@@ -353,13 +353,17 @@ function CaptionText({ text, limit = 100 }) {
     </Text>
   );
 }
-
+function getSlideCaption(p, index) {
+  const m = p?.media?.[index];
+  if (m && typeof m.caption === "string") return m.caption;
+  return p?.caption || "";
+}
 /* ── Media carousel — swipe is handled natively by the horizontal
    ScrollView's own paging (no manual PanResponder needed, unlike the web
    version's hand-rolled touch-delta swipe detection). Double-tap-to-like
    uses the same useDoubleTap hook as elsewhere in this app, layered over
    the media via a TouchableWithoutFeedback-style press handler. ── */
-function MediaCarousel({ media, onDoubleTapLike }) {
+function MediaCarousel({ media, onDoubleTapLike, onIndexChange }) {
   const [current, setCurrent] = useState(0);
   const [showBurst, setShowBurst] = useState(false);
   const burstScale = useRef(new Animated.Value(0.3)).current;
@@ -384,7 +388,9 @@ function MediaCarousel({ media, onDoubleTapLike }) {
 
   const onMomentumScrollEnd = (e) => {
     const idx = Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH);
-    setCurrent(Math.max(0, Math.min(idx, total - 1)));
+    const next = Math.max(0, Math.min(idx, total - 1));
+    setCurrent(next);
+    onIndexChange?.(next);
   };
 
   if (total === 0) return null;
@@ -768,7 +774,8 @@ function PostCard({ p, onDeleted, pendingSheet = null }) {
   const [collabSearch, setCollabSearch] = useState("");
 
   const username = p?.author?.username || p?.username || "Unknown";
-  const caption = p?.caption || "";
+    const [slideIndex, setSlideIndex] = useState(0);
+  const caption = getSlideCaption(p, slideIndex);
 
   const hideLikeCount = !!p?.hideLikeCount;
   const hideCommentCount = !!p?.hideCommentCount;
@@ -1162,7 +1169,7 @@ const onCollabResponded = ({ postId }) => {
           </View>
         </View>
 
-        <MediaCarousel media={p?.media} onDoubleTapLike={handleDoubleTapLike} />
+         <MediaCarousel media={p?.media} onDoubleTapLike={handleDoubleTapLike} onIndexChange={setSlideIndex} />
 
         <View style={styles.actions}>
           <TouchableOpacity onPress={handleToggleLike} style={styles.actionBtn}>
@@ -1206,7 +1213,7 @@ const onCollabResponded = ({ postId }) => {
             <Text style={{ fontWeight: "700" }} onPress={() => goToProfile(authorId)}>
               {username}{" "}
             </Text>
-            <CaptionText text={caption} />
+                       <CaptionText key={slideIndex} text={caption} />
           </Text>
         )}
         <TagsRow tags={tags} postId={p._id} isOwner={isOwner} onTagsUpdate={setTags} />

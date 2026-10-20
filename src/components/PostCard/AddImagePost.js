@@ -75,7 +75,13 @@ function CreateImagePost() {
   const navigation = useNavigation();
   const route = useRoute();
   const state = route.params || {};
-  const [captionText, setCaptionText] = useState("");
+   const [captions, setCaptions] = useState([]); // one description per image
+  const setCaptionAt = (i, val) =>
+    setCaptions((prev) => {
+      const next = [...prev];
+      next[i] = val;
+      return next;
+    });
   const [loading, setLoading] = useState(false);
   const [previewIndex, setPreviewIndex] = useState(0);
 
@@ -226,12 +232,16 @@ function CreateImagePost() {
         uploadedUrls.push(url);
       }
 
-      const mediaPayload = uploadedUrls.map((url) => ({ url, type: "image" }));
+       const mediaPayload = uploadedUrls.map((url, i) => ({
+        url,
+        type: "image",
+        caption: (captions[i] || "").trim(),
+      }));
       const res = await apiFetch(`${API}/auth/add-media-post`, {
         method: "POST",
         body: JSON.stringify({
           media: mediaPayload,
-          caption: captionText,
+          caption: (captions[0] || "").trim(), // legacy post-level caption
           postType: uploadedUrls.length > 1 ? "carousel" : "image",
           tags,
           collaborators: collaborators.map((c) => c._id),
@@ -291,12 +301,22 @@ function CreateImagePost() {
           )}
         </View>
 
-        {/* CAPTION */}
+        
+        {/* CAPTION — one per image */}
+        <Text style={{ fontSize: 12, color: "#999", marginTop: 12 }}>
+          {images.length > 1
+            ? `Description for image ${previewIndex + 1} of ${images.length}`
+            : "Description"}
+        </Text>
         <TextInput
-          placeholder="Write a caption..."
+          placeholder={
+            images.length > 1
+              ? `Write a caption for image ${previewIndex + 1}...`
+              : "Write a caption..."
+          }
           placeholderTextColor="#999"
-          value={captionText}
-          onChangeText={setCaptionText}
+          value={captions[previewIndex] || ""}
+          onChangeText={(v) => setCaptionAt(previewIndex, v)}
           style={styles.textarea}
           multiline
           textAlignVertical="top"
