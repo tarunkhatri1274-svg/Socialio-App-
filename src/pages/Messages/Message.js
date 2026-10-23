@@ -18,6 +18,7 @@ import {
   Platform,
   PermissionsAndroid,
   Animated,
+  RefreshControl
 } from "react-native";
 import Video from "react-native-video";
 import ReactNativeBlobUtil from "react-native-blob-util";
@@ -31,7 +32,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import Config from "react-native-config";
 import { apiFetch as authApiFetch, getCachedUser } from "../../api/authToken";
 import Svg, { Path, Line, Circle, Polyline, Polygon, Rect, Defs, LinearGradient as SvgLinearGradient, Stop } from "react-native-svg";
-
+import { useRefresh, useSwipeTabs } from "../../hooks/useRefreshAndSwipe";
 import Navbar, { subscribeTabReload, useSwipeToChangeTab } from "../../components/Navbar/Navbar";
 import socket from "../../sockets/Sockets";
 import { playAlertSound } from "../Activity/AlertSound"
@@ -1707,7 +1708,7 @@ function Messages() {
   // starting on the inbox ScrollView still scrolls normally). Only
   // wired up on the inbox list itself — spread conditionally below so
   // it doesn't fight with anything inside an open conversation.
-  const { panHandlers: swipePanHandlers } = useSwipeToChangeTab({ capture: false });
+ const { panHandlers: swipePanHandlers, screenStyle } = useSwipeToChangeTab({ capture: false, animateScreen: true });
 
   useEffect(() => {
     (async () => {
@@ -1848,14 +1849,16 @@ function Messages() {
   // is looking at the inbox (not already inside a conversation) — like
   // Instagram, ordinary focus (closing a chat, coming back from a
   // profile) does NOT reload anything; only the explicit tab tap does.
-  useEffect(() => {
-    return subscribeTabReload("Messages", () => {
-      if (openConv) return;
-      inboxScrollRef.current?.scrollTo?.({ y: 0, animated: true });
-      setLoading(true);
-      Promise.all([loadInbox(), loadRequests(), loadGroups(), loadGroupRequests()]).finally(() => setLoading(false));
-    });
-  }, [openConv, loadInbox, loadRequests, loadGroups, loadGroupRequests]);
+  const { refreshing, onRefresh } = useRefresh(() =>
+  Promise.all([loadInbox(), loadRequests(), loadGroups(), loadGroupRequests()])
+);
+useEffect(() => {
+  return subscribeTabReload("Messages", () => {
+    if (openConv) return;
+    inboxScrollRef.current?.scrollTo?.({ y: 0, animated: true });
+    onRefresh();
+  });
+}, [openConv, onRefresh]);
 
   const isOnline = userId => onlineUsers.includes(userId?.toString());
 
@@ -1979,11 +1982,13 @@ const closeGroupChat = async () => {
   if (!currentUser) return null;
 
   return (
-    <View style={s.page} {...(!openConv ? swipePanHandlers : {})}>
+    <Animated.View style={s.page} {...(!openConv ? swipePanHandlers : {})}>
       {showNewChat && <NewChatSheet onClose={() => setShowNewChat(false)} onSelectUser={openChat} />}
       {showNewGroup && <NewGroupSheet onClose={() => setShowNewGroup(false)} onCreated={handleGroupCreated} />}
 
-      <ScrollView ref={inboxScrollRef} style={s.dmListWrap}>
+      <ScrollView ref={inboxScrollRef} style={s.dmListWrap}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="rgb(234,182,118)" colors={["rgb(234,182,118)"]} />}
+      >
         <View style={s.dmHeader}>
           <View>
             <Text style={s.dmTitle}>Messages</Text>
@@ -2101,7 +2106,7 @@ const closeGroupChat = async () => {
       {openConv && !openConv.isGroup && (
         <ChatWindow conversation={openConv} currentUser={currentUser} onlineUsers={onlineUsers} onRequestHandled={handleRequestHandled} onClose={closeChat} />
       )}
-    </View>
+    </Animated.View>
   );
 }
 

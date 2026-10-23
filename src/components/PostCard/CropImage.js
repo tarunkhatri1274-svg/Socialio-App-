@@ -2,6 +2,7 @@ import React, { useRef, useState, useCallback } from "react";
 import { View, Image, StyleSheet } from "react-native";
 import ImageEditor from "@react-native-community/image-editor";
 import ViewShot from "react-native-view-shot";
+import ReactNativeBlobUtil from "react-native-blob-util";
 import {
   ColorMatrix,
   concatColorMatrices,
@@ -234,3 +235,40 @@ export default async function getEditedImage(imageSrc, crop, filter) {
   const filteredUri = unwrapImageEditorResult(rawFilteredResult);
   return { uri: filteredUri, type: "image/jpeg", name: `edited-${Date.now()}.jpg` };
 }
+
+/**
+ * inspectImageFile(uri) → { size, decodes }
+ * Used by EditPost.js (right after each frame capture) and AddImagePost.js
+ * (right before each upload) to catch an empty / missing image file BEFORE it
+ * turns into a confusing network error.
+ *   size    – bytes on disk via blob-util (0 = missing/empty, null = couldn't check)
+ *   decodes – true if React Native itself can read the image's dimensions. This
+ *             is the "second opinion" so a wrong answer from one check can't
+ *             condemn a perfectly good file.
+ */
+export async function inspectImageFile(uri) {
+  let size = null;
+  try {
+    if (uri && uri.startsWith("file://")) {
+      const path = decodeURIComponent(uri.replace("file://", ""));
+      const n = (await ReactNativeBlobUtil.fs.exists(path))
+        ? Number((await ReactNativeBlobUtil.fs.stat(path)).size)
+        : 0;
+      size = Number.isFinite(n) ? n : null;
+    }
+  } catch {}
+  let decodes = false;
+  try {
+    await new Promise((resolve, reject) =>
+      Image.getSize(
+        uri,
+        (w, h) => (w > 0 && h > 0 ? resolve() : reject(new Error("0x0 image"))),
+        reject
+      )
+    );
+    decodes = true;
+  } catch {}
+  return { size, decodes };
+}
+
+export const isUsableImage = ({ size, decodes }) => decodes || (size != null && size > 0);

@@ -1,7 +1,8 @@
 import React, { useEffect, useState, useCallback, useRef } from "react";
-import { View, FlatList, Dimensions, StyleSheet, Keyboard } from "react-native";
-
+import { View, FlatList, Dimensions, StyleSheet, Keyboard,Animated } from "react-native";
+import { useRefresh, useSwipeTabs } from "../../hooks/useRefreshAndSwipe";
 import Config from "react-native-config";
+import { useBlockedIds, subscribeBlocked, loadBlockedStore } from "../../components/State/BlockStore";
 import Videopost from "../../components/PostCard/Video";
 import SocialioVideoAd from "../../components/Ads/SocialioVideoAd";
 import Navbar, { setCommentsOpen, subscribeTabReload, useSwipeToChangeTab } from "../../components/Navbar/Navbar";
@@ -21,7 +22,7 @@ const SCREEN_HEIGHT = Dimensions.get("window").height;
 
 function VideoPage() {
   const [videos, setVideos] = useState([]);
-  const [blockedIds, setBlockedIds] = useState(new Set());
+  const blockedIds = useBlockedIds(); // shared block state (BlockStore)
   const [visibleVideoIds, setVisibleVideoIds] = useState(() => new Set());
 const [myId, setMyId] = useState(null);
   // NEW: tracks whether any sheet (likers/viewers/comments/share/collab/
@@ -38,7 +39,7 @@ const [myId, setMyId] = useState(null);
   // steals the vertical drag from the reels FlatList below: the list
   // claims a touch that starts as a vertical pan itself, and only a
   // clearly-horizontal drag that nothing else claimed reaches this).
-  const { panHandlers: swipePanHandlers } = useSwipeToChangeTab({ capture: false });
+ const { panHandlers: swipePanHandlers, screenStyle } = useSwipeToChangeTab({ capture: false, animateScreen: true });
 
   // Hide the Navbar while the keyboard is up so it can't float over the
   // tag / collaborator inputs (window resizes and lifts the Navbar above the keyboard).
@@ -94,18 +95,7 @@ useEffect(() => {
     else removeFollowing(authorId);
   }, []);
 
-const fetchBlocked = useCallback(async () => {
-  try {
-    const res = await apiFetch(`${API}/auth/blocked-users`);
-    const data = await res.json();
-    if (data.success) {
-      const ids = (data.blockedUsers || []).map((u) => (u?._id ?? u).toString());
-      setBlockedIds(new Set(ids));
-    }
-  } catch (err) {
-    console.error("FETCH BLOCKED USERS ERROR:", err);
-  }
-}, []);
+const fetchBlocked = useCallback(() => loadBlockedStore(), []);
 
   const fetchVideos = useCallback(async () => {
     try {
@@ -117,20 +107,25 @@ const fetchBlocked = useCallback(async () => {
     }
   }, []);
 
+// Unblocked on another page -> refetch so their videos come back.
+useEffect(
+  () => subscribeBlocked((id, isBlocked) => { if (id && !isBlocked) fetchVideos(); }),
+  [fetchVideos]
+);
 
+const { refreshing, onRefresh } = useRefresh(() => Promise.all([fetchVideos(), fetchBlocked()]));
 
   // NEW — tapping the already-active "VideoPage" (Shorts/Reels) tab
   // reloads this screen: scrolls back to the first video and refetches.
   // This is the ONLY thing that resets scroll/remounts the list now —
   // ordinary focus (swiping back from a profile, etc.) leaves everything
   // exactly as you left it.
-  useEffect(() => {
-    return subscribeTabReload("VideoPage", () => {
-      videoListRef.current?.scrollToOffset?.({ offset: 0, animated: true });
-      setFocusKey((k) => k + 1);
-      fetchVideos();
-    });
-  }, [fetchVideos]);
+useEffect(() => {
+  return subscribeTabReload("VideoPage", () => {
+    videoListRef.current?.scrollToOffset?.({ offset: 0, animated: true });
+    onRefresh();
+  });
+}, [onRefresh]);
 
   // Live privacy toggling, same as Home/Explore/ExploreReels: patches
   // author.isPrivate on any matching video already sitting in `videos`.
@@ -156,14 +151,14 @@ const fetchBlocked = useCallback(async () => {
     return () => socket.off("privacyChanged", handler);
   }, []);
 
-  const handleBlock = useCallback((blockedAuthorId) => {
-    setBlockedIds((prev) => new Set([...prev, blockedAuthorId]));
-    setVideos((prev) =>
-      prev.filter((v) => {
-        const vid_authorId = (v?.author?._id ?? v?.author)?.toString();
-        return vid_authorId !== blockedAuthorId;
-      })
-    );
+  // Blocking is handled by BlockStore (videos are filtered by blockedIds), so nothing is
+  // deleted from the list — unblocking anywhere simply makes them reappear.
+  const handleBlock = useCallback(() => {}, []);
+
+  // Deleting a video from its ⋮ menu (usePostOptions) removes it from the list
+  // too, so no black empty page is left behind in the reels pager.
+  const handleDeleted = useCallback((postId) => {
+    setVideos((prev) => prev.filter((v) => v._id !== postId));
   }, []);
 
   const myIdForFilter = (authUser?._id || authUser?.id)?.toString();
@@ -220,10 +215,10 @@ const fetchBlocked = useCallback(async () => {
   }, []);
 
   return (
-    <View style={styles.container} {...swipePanHandlers}>
+    <Animated.View style={styles.container} {...swipePanHandlers}>
 <FlatList
 ref={videoListRef}
-key={focusKey}
+refreshing={refreshing} onRefresh={onRefresh}
   data={feedItems}
   extraData={visibleVideoIds}
   keyExtractor={(post) => post._id}
@@ -238,6 +233,7 @@ key={focusKey}
   hasNavbar={hasNavbar}
   isVisible={visibleVideoIds.has(item._id)}
   onBlock={handleBlock}
+  onDeleted={handleDeleted}
   onSheetOpen={handleSheetOpen}
   myId={myId}
   myFollowingIds={myFollowingIds}
@@ -277,7 +273,7 @@ key={focusKey}
           <Navbar />
         </View>
       )}
-    </View>
+    </Animated.View>
   );
 }
 

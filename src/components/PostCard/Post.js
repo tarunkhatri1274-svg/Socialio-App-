@@ -27,6 +27,7 @@ import Video from "react-native-video";
 import ReactNativeBlobUtil from "react-native-blob-util";
 import { CameraRoll } from "@react-native-camera-roll/camera-roll";
 import { apiFetch, getCachedUser } from "../../api/authToken"; // adjust relative path — count folders to src/api/authToken.js
+import usePostOptions from "./usePostOptions";
 import Config from "react-native-config";
 import { useNavigation, useRoute } from "@react-navigation/native";
 import socket, { joinPostRoom, leavePostRoom } from "../../sockets/Sockets";
@@ -465,11 +466,15 @@ function MediaCarousel({ media, onDoubleTapLike, onIndexChange }) {
 function TagsRow({ tags, postId, isOwner, onTagsUpdate }) {
   const [tagInput, setTagInput] = useState("");
   const [showInput, setShowInput] = useState(false);
+  const [tagResults, setTagResults] = useState([]);
+  const tagTimer = useRef(null);
   const navigation = useNavigation();
 
-  const addTag = async () => {
-    const t = tagInput.trim().toLowerCase().replace(/\s+/g, "_");
+  const addTag = async (override) => {
+    const raw = typeof override === "string" ? override : tagInput;
+    const t = raw.trim().replace(/^[@#]/, "").toLowerCase().replace(/\s+/g, "_");
     if (!t) return;
+    setTagResults([]);
     try {
       const res = await apiFetch(`${API}/auth/add-tag/${postId}`, {
         method: "PATCH",
@@ -484,6 +489,26 @@ function TagsRow({ tags, postId, isOwner, onTagsUpdate }) {
       }
     } catch {}
   };
+
+  // ── suggest users while typing (tags are username mentions) ──
+  const handleTagInput = (val) => {
+    setTagInput(val);
+    clearTimeout(tagTimer.current);
+    const q = val.trim().replace(/^[@#]/, "");
+    if (!q) { setTagResults([]); return; }
+    tagTimer.current = setTimeout(async () => {
+      try {
+        const res = await apiFetch(`${API}/auth/search?q=${encodeURIComponent(q)}`);
+        if (!res.ok) { setTagResults([]); return; }
+        const data = await res.json();
+        const list = Array.isArray(data) ? data : data.users || [];
+        setTagResults(
+          list.filter((u) => u.username && !(tags || []).includes(u.username.toLowerCase())).slice(0, 6)
+        );
+      } catch {}
+    }, 300);
+  };
+  const pickTagUser = (u) => addTag(u.username);
 
   const removeTag = async (tag) => {
     try {
@@ -529,7 +554,7 @@ const goToTaggedUser = async (tag) => {
           <View style={{ flexDirection: "row", gap: 4, alignItems: "center" }}>
             <TextInput
               value={tagInput}
-              onChangeText={setTagInput}
+              onChangeText={handleTagInput}
               onSubmitEditing={addTag}
               placeholder="tag..."
               autoFocus
@@ -547,6 +572,16 @@ const goToTaggedUser = async (tag) => {
             <Text style={{ color: "#666", fontSize: 12 }}>+ tag</Text>
           </TouchableOpacity>
         ))}
+      {isOwner && showInput && tagResults.length > 0 && (
+        <View style={[styles.collabResults, { width: "100%" }]}>
+          {tagResults.map((u) => (
+            <TouchableOpacity key={u._id} onPress={() => pickTagUser(u)} style={styles.collabResultRow}>
+              <Avatar src={u.profilePic} username={u.username} size={28} />
+              <Text style={{ fontSize: 13, fontWeight: "600" }}>{u.username}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
     </View>
   );
 }
@@ -726,15 +761,11 @@ function PostCard({ p, onDeleted, pendingSheet = null }) {
   const [showShare, setShowShare] = useState(false);
   const [commentText, setCommentText] = useState("");
   const [likerSearch, setLikerSearch] = useState("");
-  const [isNotInterested, setIsNotInterested] = useState(p?.isNotInterested || false);
-  const [isHidden, setIsHidden] = useState(p?.isHiddenFromNonFollowers || false);
-  const [isBlocked, setIsBlocked] = useState(false);
   const [comments, setComments] = useState(p?.comments ?? []);
   const [tags, setTags] = useState(p?.tags ?? []);
   const [collaborators, setCollaborators] = useState(p?.collaborators ?? []);
   const [sharesCount, setSharesCount] = useState(p?.shares?.length ?? p?.sharesCount ?? 0);
   const [downloadsCount, setDownloadsCount] = useState(p?.downloads?.length ?? p?.downloadsCount ?? 0);
-  const [removedFromView, setRemovedFromView] = useState(false);
   // ← NEW — which comment/reply (if any) to scroll to + highlight once
   // the Comments sheet opens, set from a notification handoff (route
   // params — see Post()'s pendingSheet below).
@@ -774,6 +805,30 @@ function PostCard({ p, onDeleted, pendingSheet = null }) {
   const [collabSearch, setCollabSearch] = useState("");
 
   const username = p?.author?.username || p?.username || "Unknown";
+  // ── all ⋮-menu actions live in usePostOptions.js ──
+  const {
+    options: menuOptions,
+    handleMenuAction,
+    isHidden,
+    isNotInterested,
+    isBlocked,
+    removedFromView,
+    setRemovedFromView,
+    acceptedCollaborators,
+    myCollabEntry,
+  } = usePostOptions({
+    post: p,
+    isOwner,
+    authorId,
+    username,
+    noun: "post",
+    menu: menu,
+    currentUserId: currentUserId,
+    collaborators: collaborators,
+    onCollaboratorsChange: setCollaborators,
+    onDeleted,
+  });
+
     const [slideIndex, setSlideIndex] = useState(0);
   const caption = getSlideCaption(p, slideIndex);
 
@@ -913,85 +968,11 @@ const onCollabResponded = ({ postId }) => {
     if (!liked) handleToggleLike();
   };
 
-  const handleBlock = async () => {
-    if (isBlocked) return;
-    const ok = await confirmAsync(`Block ${username}?`);
-    if (!ok) return;
-    try {
-      const res = await apiFetch(`${API}/auth/block/${authorId}`, { method: "POST"});
-      const data = await res.json();
-      if (data.success) {
-        setIsBlocked(true);
-        menu.close();
-      }
-    } catch {}
-  };
 
-  const handleDelete = async () => {
-    const ok = await confirmAsync("Delete this post?");
-    if (!ok) return;
-    try {
-      const res = await apiFetch(`${API}/auth/delete-post/${p._id}`, { method: "DELETE"});
-      const data = await res.json();
-      if (res.ok) {
-        setRemovedFromView(true);
-        onDeleted?.(p._id);
-      } else {
-        Alert.alert("Error", data.message);
-      }
-    } catch {}
-  };
 
-  const HideFromNonFollowers = async () => {
-    try {
-      const res = await apiFetch(`${API}/auth/hide-from-non-followers/${p._id}`, { method: "PATCH" });
-      const data = await res.json();
-      if (res.ok) {
-        setIsHidden(data.isHidden);
-        Alert.alert("", data.message);
-      }
-    } catch {}
-  };
 
-  const notInterested = async () => {
-    try {
-      const res = await apiFetch(`${API}/auth/not-interested/${p._id}`, { method: "PATCH" });
-      const data = await res.json();
-      if (data.success) {
-        setIsNotInterested((prev) => !prev);
-        Alert.alert("", data.message);
-      }
-    } catch {}
-  };
 
-  const handleRemoveCollab = async (collabUser) => {
-    const isLeavingSelf = collabUser?._id?.toString() === currentUserId?.toString();
-    const confirmMsg = isLeavingSelf
-      ? "Remove yourself as a collaborator on this post? It will no longer show on your profile."
-      : `Remove ${collabUser?.username} as a collaborator? The post will no longer show on their profile.`;
-    const ok = await confirmAsync(confirmMsg);
-    if (!ok) return;
 
-    try {
-      const res = await apiFetch(`${API}/auth/remove-collaborator/${p._id}`, {
-        method: "PATCH",
-       
-        body: JSON.stringify({ userId: collabUser._id }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setCollaborators(data.collaborators ?? []);
-        menu.close();
-        if (isLeavingSelf && !isOwner) {
-          setRemovedFromView(true);
-          onDeleted?.(p._id);
-        }
-      }
-    } catch {}
-  };
-
-  const acceptedCollaborators = (collaborators || []).filter((c) => c.status === "accepted");
-  const myCollabEntry = acceptedCollaborators.find((c) => (c.user?._id ?? c.user)?.toString() === currentUserId?.toString());
 
   // ── NEW: full collaborator roster (author + accepted collaborators),
   // used by the CollabListSheet — same shape as likedByUsers.
@@ -1000,55 +981,8 @@ const onCollabResponded = ({ postId }) => {
     u.username?.toLowerCase().includes(collabSearch.toLowerCase())
   );
 
-  const buildMenuOptions = () => {
-    const opts = [];
-    if (isOwner) {
-      opts.push({ key: "delete", label: "Delete", danger: true, action: handleDelete });
-      opts.push({
-        key: "hide",
-        label: isHidden ? "Show to everyone" : "Hide from non-followers",
-        action: HideFromNonFollowers,
-      });
-      // FIXED — key was `remove-${c.user?._id}`. If the backend sends a
-      // collaborator entry where `user` isn't populated (a raw id string,
-      // or missing), c.user?._id is undefined for every one of them, so
-      // 2+ collaborators all got the literal key "remove-undefined" —
-      // the duplicate-key warning seen in logcat. Falling back through
-      // c.user (in case it's a raw id string) and finally the loop
-      // index guarantees uniqueness regardless of population state.
-      acceptedCollaborators.forEach((c, i) => {
-        const uid = c.user?._id || c.user || i;
-        opts.push({
-          key: `remove-${uid}`,
-          label: `Remove collab: ${c.user?.username ?? "Unknown"}`,
-          danger: true,
-          action: () => handleRemoveCollab(c.user),
-        });
-      });
-    } else if (isBlocked) {
-      opts.push({ key: "blocked", label: "Blocked", disabled: true, action: () => {} });
-    } else {
-      opts.push({ key: "interest", label: isNotInterested ? "Interested" : "Not Interested", action: notInterested });
-      opts.push({ key: "block", label: "Block", danger: true, action: handleBlock });
-      if (myCollabEntry) {
-        opts.push({
-          key: "leave-collab",
-          label: "Remove myself as collaborator",
-          danger: true,
-          action: () => handleRemoveCollab(myCollabEntry.user),
-        });
-      }
-    }
-    return opts;
-  };
 
-  const menuOptions = buildMenuOptions();
 
-  const handleMenuAction = (opt) => {
-    if (opt.disabled) return;
-    menu.close();
-    opt.action();
-  };
 
   // Download all media straight to the device — no chooser, no "open with
   // Chrome". Linking.openURL only ever hands the URL to the OS, which is

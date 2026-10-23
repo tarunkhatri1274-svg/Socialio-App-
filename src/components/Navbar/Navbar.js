@@ -7,7 +7,7 @@ import {
   Animated,
   PanResponder,
   StyleSheet,
-  Platform,
+  Platform,Dimensions
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { apiFetch, getCachedUser } from "../../api/authToken"; // adjust relative path to this file's location
@@ -37,7 +37,7 @@ const RUBBER_BAND = 0.35;
 
 // Screen names in your navigator — swap these if yours differ.
 const PAGE_ORDER = ["Home", "Search", "VideoPage", "Notifications", "Messages", "Profile"];
-
+const SCREEN_W = Dimensions.get("window").width;
 /* ─────────────────────────── Auth cache (mirrors Homepage.js's pattern) ─────────────────────────── */
 /* ─────────────────────────── Local (non-auth) caches ─────────────────────────── */
 // cachedUser and cachedNotifSettings aren't security-sensitive like the
@@ -143,21 +143,29 @@ function emitTabReload(screenName) {
 }
 
 
-export function useSwipeToChangeTab({ capture = false } = {}) {
+export function useSwipeToChangeTab({ capture = false, animateScreen = false } = {}) {
   const navigation = useNavigation();
   const route = useRoute();
   const [commentsOpen, setCommentsOpen] = useState(false);
   useEffect(() => subscribeCommentsOpen(setCommentsOpen), []);
 
   const dragX = useRef(new Animated.Value(0)).current;
+  const opacity = useRef(new Animated.Value(1)).current;
   const swipeDx = useRef(0);
+  const navigating = useRef(false);
 
-const isEligible = (g) =>
-  !commentsOpen &&
-  !isCarouselTouchActive() &&
-  PAGE_ORDER.includes(route.name) &&
-  Math.abs(g.dx) > SWIPE_INTENT_THRESHOLD &&
-  Math.abs(g.dx) > Math.abs(g.dy) * 1.5;
+  const isEligible = (g) =>
+    !navigating.current && !commentsOpen && !isCarouselTouchActive() &&
+    PAGE_ORDER.includes(route.name) &&
+    Math.abs(g.dx) > SWIPE_INTENT_THRESHOLD &&
+    Math.abs(g.dx) > Math.abs(g.dy) * 1.5;
+
+  const reset = () => {
+    Animated.parallel([
+      Animated.spring(dragX, { toValue: 0, useNativeDriver: true, friction: 7 }),
+      Animated.timing(opacity, { toValue: 1, duration: 120, useNativeDriver: true }),
+    ]).start();
+  };
 
   const panResponder = useRef(
     PanResponder.create({
@@ -166,42 +174,59 @@ const isEligible = (g) =>
       onStartShouldSetPanResponderCapture: () => false,
       onMoveShouldSetPanResponderCapture: (_, g) => capture && isEligible(g),
       onPanResponderTerminationRequest: () => false,
-      // Always block native responders (e.g. Android's own scroll/gesture
-      // views, and the native "swipe from the edge to go back" gesture)
-      // from stealing the touch once we've claimed it — this used to only
-      // apply when capture:true, which left the bubble-phase (screen-wide)
-      // swipe unprotected. React Navigation's built-in edge-swipe-back
-      // gesture only ever fires for LEFT-TO-RIGHT drags, which is exactly
-      // why only right-to-left swipes were changing tabs before.
       onShouldBlockNativeResponder: () => true,
       onPanResponderMove: (_, g) => {
         swipeDx.current = g.dx;
-        const rubberBanded = Math.max(-MAX_DRAG_OFFSET, Math.min(MAX_DRAG_OFFSET, g.dx * RUBBER_BAND));
-        dragX.setValue(rubberBanded);
-      },
-      onPanResponderRelease: () => {
-        const dx = swipeDx.current;
-        Animated.spring(dragX, { toValue: 0, useNativeDriver: true, friction: 6 }).start();
-
-        if (Math.abs(dx) < SWIPE_THRESHOLD) return;
-        const currentIndex = PAGE_ORDER.indexOf(route.name);
-        if (currentIndex === -1) return;
-
-        if (dx <= -SWIPE_THRESHOLD) {
-          const nextIndex = Math.min(currentIndex + 1, PAGE_ORDER.length - 1);
-          if (nextIndex !== currentIndex) navigation.navigate(PAGE_ORDER[nextIndex]);
-        } else if (dx >= SWIPE_THRESHOLD) {
-          const prevIndex = Math.max(currentIndex - 1, 0);
-          if (prevIndex !== currentIndex) navigation.navigate(PAGE_ORDER[prevIndex]);
+        if (animateScreen) {
+          const i = PAGE_ORDER.indexOf(route.name);
+          const atEdge = (g.dx > 0 && i === 0) || (g.dx < 0 && i === PAGE_ORDER.length - 1);
+          dragX.setValue(atEdge ? g.dx * 0.15 : g.dx * 0.5);
+          opacity.setValue(1 - Math.min(Math.abs(g.dx) / SCREEN_W, 1) * 0.6);
+        } else {
+          dragX.setValue(Math.max(-MAX_DRAG_OFFSET, Math.min(MAX_DRAG_OFFSET, g.dx * RUBBER_BAND)));
         }
       },
-      onPanResponderTerminate: () => {
-        Animated.spring(dragX, { toValue: 0, useNativeDriver: true, friction: 6 }).start();
+      onPanResponderRelease: (_, g) => {
+        const dx = swipeDx.current;
+        const passed = Math.abs(dx) >= SWIPE_THRESHOLD || (Math.abs(g.vx) > 0.6 && Math.abs(dx) > 30);
+        const i = PAGE_ORDER.indexOf(route.name);
+        const target = PAGE_ORDER[i + (dx < 0 ? 1 : -1)];
+
+        if (!passed || i === -1 || !target) {
+          if (animateScreen) reset();
+          else Animated.spring(dragX, { toValue: 0, useNativeDriver: true, friction: 6 }).start();
+          return;
+        }
+
+        if (!animateScreen) {
+          Animated.spring(dragX, { toValue: 0, useNativeDriver: true, friction: 6 }).start();
+          navigation.navigate(target);
+          return;
+        }
+
+        navigating.current = true;
+        Animated.parallel([
+          Animated.timing(dragX, { toValue: (dx < 0 ? -1 : 1) * SCREEN_W * 0.3, duration: 150, useNativeDriver: true }),
+          Animated.timing(opacity, { toValue: 0, duration: 150, useNativeDriver: true }),
+        ]).start(() => {
+          navigation.navigate(target);
+          setTimeout(() => {
+            dragX.setValue(0);
+            opacity.setValue(1);
+            navigating.current = false;
+          }, 350);
+        });
       },
+      onPanResponderTerminate: () =>
+        animateScreen ? reset() : Animated.spring(dragX, { toValue: 0, useNativeDriver: true }).start(),
     })
   ).current;
 
-  return { panHandlers: panResponder.panHandlers, dragX };
+  return {
+    panHandlers: panResponder.panHandlers,
+    dragX,
+    screenStyle: { opacity, transform: [{ translateX: dragX }] },
+  };
 }
 
 // ── Type → bubble icon + color, same mapping as the web NotifCard ──

@@ -12,7 +12,8 @@ import {
   StyleSheet,
   findNodeHandle,
   FlatList,
-  PanResponder,
+  Animated,
+  RefreshControl,
 } from "react-native";
 import Video from "react-native-video";
 import FeatherIcon from "react-native-vector-icons/Feather";
@@ -21,24 +22,20 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useNavigation, useRoute, useFocusEffect } from "@react-navigation/native";
 import Config from "react-native-config";
 import socket from "../../sockets/Sockets";
-// FIXED — this screen used to read a "openMemory" AsyncStorage key that
-// nothing ever wrote (a leftover of the web version's sessionStorage
-// handoff). ActivityPage.js's handleOpenMemory actually hands the
-// target off via this in-memory consumePendingOpenMemory() function —
-// adjust the path below if ActivityPage.js lives somewhere else.
 import { consumePendingOpenMemory } from "../Activity/ActivityPage";
 import FollowButton from "./FollowButton";
 import { useFollowAction } from "./UseFollowAction";
-import { apiFetch, getCachedUser } from "../../api/authToken"; // adjust relative path
+import { apiFetch, getCachedUser } from "../../api/authToken";
 import { setFollowStatus } from "./UseFollowState";
+import { useBlockedIds, setBlocked } from "../../components/State/BlockStore";
 import MemoriesRow from "../../components/Memories/MemoryRow";
 import MemoryViewer from "../../components/Memories/MemoryViewer";
 import StoryViewer from "../../components/StoryBar/StoryViewer";
 import MuteMenu from "./MuteMenu";
 import { ProfileHeaderSkeleton, ProfileGridSkeleton } from "../../components/Skeleton/ProfileSkeleton";
+import { useRefresh, useSwipeTabs } from "../../hooks/useRefreshAndSwipe";
 
-const API = Config.API_URL; // swap for your RN env config
-
+const API = Config.API_URL;
 
 // ── Count formatter ──────────────────────────────────────────────────────
 function formatCount(num) {
@@ -120,15 +117,6 @@ const gridArrow = (side) => ({
 });
 
 // ── Video grid thumbnail resolver ────────────────────────────────────────
-// Mounting a live <Video> player in every grid cell causes overlapping/
-// bleeding thumbnails on Android (SurfaceView doesn't respect clipping).
-// Prefer a static poster image, in this order:
-//   1. an explicit thumbnail field, if the backend ever adds one
-//   2. a still frame derived from the Cloudinary video URL itself
-//      (no backend change needed — Cloudinary can render any video
-//      frame as a JPEG via URL transformation)
-//   3. fall back to rendering the actual video (muted/paused) only if
-//      neither of the above is possible (e.g. non-Cloudinary URL)
 function cloudinaryVideoThumbnail(url) {
   if (!url || typeof url !== "string") return null;
   if (!url.includes("res.cloudinary.com") || !url.includes("/video/upload/")) return null;
@@ -140,9 +128,8 @@ function cloudinaryVideoThumbnail(url) {
   const before = url.slice(0, idx + marker.length);
   let after = url.slice(idx + marker.length);
 
-  // Swap the video extension for .jpg and grab the frame at 0s (so_0).
   after = after.replace(/\.(mp4|mov|webm|mkv|avi|m4v)(\?.*)?$/i, ".jpg$2");
-  if (!/\.jpg(\?.*)?$/i.test(after)) return null; // unrecognized extension — bail out
+  if (!/\.jpg(\?.*)?$/i.test(after)) return null;
 
   return `${before}so_0/${after}`;
 }
@@ -166,10 +153,6 @@ function VideoGridThumb({ video, style }) {
   if (thumbUri) {
     return <Image source={{ uri: thumbUri }} style={style} resizeMode="cover" />;
   }
-  // Neither an explicit thumbnail nor a derivable Cloudinary frame —
-  // fall back to a real (muted/paused) video render. useTextureView
-  // keeps Android from letting the SurfaceView bleed into neighboring
-  // cells even in this fallback case.
   return (
     <Video
       source={{ uri: video?.media?.[0]?.url }}
@@ -184,9 +167,6 @@ function VideoGridThumb({ video, style }) {
 
 // ── Tab order used for horizontal swipe navigation ──────────────────────────
 const PROFILE_TAB_ORDER = ["posts", "Shorts", "text"];
-const SWIPE_HORIZONTAL_THRESHOLD = 12; // px moved before we commit to a horizontal gesture
-const SWIPE_DIRECTION_RATIO = 2;       // how much more horizontal than vertical movement is required
-const SWIPE_RELEASE_THRESHOLD = 50;    // px needed on release to actually change tabs
 
 // ── Main Component ──────────────────────────────────────────────────────
 function UserProfileView() {
@@ -209,11 +189,11 @@ function UserProfileView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // ── PERSISTED ACTIVE TAB — keyed by userId via AsyncStorage, restored
-  // on focus (not just mount) since React Navigation stack screens often
-  // stay mounted underneath a pushed detail screen.
   const [activeTab, setActiveTab] = useState("posts");
   const consumedReturnTabForUserRef = useRef(null);
+
+  // Smooth swipe between Posts / Shorts / Text sub-tabs
+  const tabSwipe = useSwipeTabs({ order: PROFILE_TAB_ORDER, activeTab, setActiveTab });
 
   useFocusEffect(
     useCallback(() => {
@@ -242,11 +222,11 @@ function UserProfileView() {
     }, [userId])
   );
 
-  const [isBlocked, setIsBlocked] = useState(false);
+  const isBlocked = useBlockedIds().has(String(userId)); // shared block state (BlockStore)
   const [isPrivate, setIsPrivate] = useState(false);
   const [messageBusy, setMessageBusy] = useState(false);
 
-  const [listModal, setListModal] = useState(null); // "followers" | "following" | null
+  const [listModal, setListModal] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [modalList, setModalList] = useState([]);
   const [modalLoading, setModalLoading] = useState(false);
@@ -269,35 +249,7 @@ function UserProfileView() {
   const [memoryViewer, setMemoryViewer] = useState(null);
 
   const scrollViewRef = useRef(null);
-  const itemRefs = useRef({}); // postId -> node ref
-
-  // ── Swipe left/right on the tab content to move to the next/previous tab.
-  // Only claims the gesture once the drag is clearly more horizontal than
-  // vertical, so the outer vertical ScrollView keeps working normally.
-  const goToAdjacentTab = useCallback((direction) => {
-    setActiveTab((current) => {
-      const idx = PROFILE_TAB_ORDER.indexOf(current);
-      if (idx === -1) return current;
-      const nextIdx = idx + direction;
-      if (nextIdx < 0 || nextIdx >= PROFILE_TAB_ORDER.length) return current;
-      return PROFILE_TAB_ORDER[nextIdx];
-    });
-  }, []);
-
-  const tabPanResponder = useRef(
-    PanResponder.create({
-      onMoveShouldSetPanResponder: (_evt, gestureState) =>
-        Math.abs(gestureState.dx) > SWIPE_HORIZONTAL_THRESHOLD &&
-        Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * SWIPE_DIRECTION_RATIO,
-      onPanResponderRelease: (_evt, gestureState) => {
-        if (gestureState.dx <= -SWIPE_RELEASE_THRESHOLD) {
-          goToAdjacentTab(1); // swipe left → next tab
-        } else if (gestureState.dx >= SWIPE_RELEASE_THRESHOLD) {
-          goToAdjacentTab(-1); // swipe right → previous tab
-        }
-      },
-    })
-  ).current;
+  const itemRefs = useRef({});
 
   const fetchGroups = useCallback(async () => {
     if (!userId || !canSeePosts) { setGroups([]); return; }
@@ -312,18 +264,6 @@ function UserProfileView() {
 
   useEffect(() => { fetchGroups(); }, [fetchGroups]);
 
-  // FIXED — consume the "open this exact memory" handoff. This now
-  // reads the same in-memory value ActivityPage.js's handleOpenMemory
-  // actually sets (consumed once, read-and-clear), instead of an
-  // AsyncStorage key nothing wrote to.
-  //
-  // ALSO FIXED — useFocusEffect, not useEffect. A fresh notification tap
-  // usually pushes a new UserProfile screen instance (so plain useEffect
-  // would work), but tapping a memory notification about someone whose
-  // profile you're ALREADY viewing doesn't remount the screen — React
-  // Navigation just re-focuses the existing one — so the effect would
-  // never re-fire and the handoff would sit unconsumed, same bug as
-  // ProfilePage.js's Profile tab.
   useFocusEffect(
     useCallback(() => {
       if (!userId || isOwnProfile) return;
@@ -412,52 +352,69 @@ function UserProfileView() {
     };
   }, [userId, fetchStory]);
 
-  // ── Fetch profile ─────────────────────────────────────────────────────
-  useEffect(() => {
+  // ── Fetch profile (now a callback so pull-to-refresh can reuse it) ────
+  const fetchUser = useCallback(async () => {
     if (!userId) return;
-    const fetchUser = async () => {
-      try {
-        const res = await apiFetch(`${API}/auth/user/${userId}`);
-        if (!res.ok) { setError("Failed to load profile."); setLoading(false); return; }
-        const data = await res.json();
-        if (data.user) {
-          setUser(data.user);
-          setIsPrivate(data.user.isPrivate ?? false);
-          setIsBlocked(data.user.isBlockedByMe ?? false);
-          setFollowStatus(
-            userId,
-            data.user.isFollowedByMe ? "following"
-              : data.user.followRequestPending ? "requested"
-              : "none"
-          );
-        } else {
-          setError("User not found.");
-        }
-      } catch {
-        setError("Network error. Please try again.");
-      } finally {
-        setLoading(false);
+    try {
+      const res = await apiFetch(`${API}/auth/user/${userId}`);
+      if (!res.ok) { setError("Failed to load profile."); setLoading(false); return; }
+      const data = await res.json();
+      if (data.user) {
+        setUser(data.user);
+        setIsPrivate(data.user.isPrivate ?? false);
+        setBlocked(userId, data.user.isBlockedByMe ?? false);
+        setFollowStatus(
+          userId,
+          data.user.isFollowedByMe ? "following"
+            : data.user.followRequestPending ? "requested"
+            : "none"
+        );
+        setError(null);
+      } else {
+        setError("User not found.");
       }
-    };
-    fetchUser();
+    } catch {
+      setError("Network error. Please try again.");
+    } finally {
+      setLoading(false);
+    }
   }, [userId]);
 
-  // ── Fetch posts ────────────────────────────────────────────────────────
-  useEffect(() => {
+  useEffect(() => { fetchUser(); }, [fetchUser]);
+
+  // ── Fetch posts (callback) ─────────────────────────────────────────────
+  const fetchPosts = useCallback(async () => {
     if (!userId) return;
-    const fetchPosts = async () => {
-      try {
-        const res = await apiFetch(`${API}/auth/get-posts/${userId}`);
-        const data = await res.json();
-        if (data.success) setPosts(data.posts);
-      } catch {}
-    };
-    fetchPosts();
+    try {
+      const res = await apiFetch(`${API}/auth/get-posts/${userId}`);
+      const data = await res.json();
+      if (data.success) setPosts(data.posts);
+    } catch {}
   }, [userId]);
 
-  // ── Scroll to the exact post/short/text-post tapped, once posts have
-  // loaded and this screen is focused. Uses a ref registry + measureLayout
-  // instead of getElementById/scrollIntoView.
+  useEffect(() => { fetchPosts(); }, [fetchPosts]);
+
+  // ── Fetch mutual followers (callback) ──────────────────────────────────
+  const fetchMutuals = useCallback(async () => {
+    if (!userId || isOwnProfile) return;
+    try {
+      const res = await apiFetch(`${API}/auth/mutuals/${userId}`);
+      const data = await res.json();
+      if (data.success) {
+        setMutuals(data.mutuals || []);
+        setMutualCount(data.count || 0);
+      }
+    } catch {}
+  }, [userId, isOwnProfile]);
+
+  useEffect(() => { fetchMutuals(); }, [fetchMutuals]);
+
+  // ── Pull-to-refresh ────────────────────────────────────────────────────
+  const { refreshing, onRefresh } = useRefresh(() =>
+    Promise.all([fetchUser(), fetchPosts(), fetchStory(), fetchGroups(), fetchMutuals()])
+  );
+
+  // Scroll to the exact post tapped, once posts have loaded
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
@@ -488,22 +445,6 @@ function UserProfileView() {
       return () => { cancelled = true; };
     }, [loading, posts, userId])
   );
-
-  // ── Fetch mutual followers ───────────────────────────────────────────
-  useEffect(() => {
-    if (!userId || isOwnProfile) return;
-    const fetchMutuals = async () => {
-      try {
-        const res = await apiFetch(`${API}/auth/mutuals/${userId}`);
-        const data = await res.json();
-        if (data.success) {
-          setMutuals(data.mutuals || []);
-          setMutualCount(data.count || 0);
-        }
-      } catch {}
-    };
-    fetchMutuals();
-  }, [userId, isOwnProfile]);
 
   // ── Live socket: follower/following list updates ────────────────────
   useEffect(() => {
@@ -588,13 +529,7 @@ function UserProfileView() {
 
     const onCollabResponded = ({ postId, accepted }) => {
       if (!accepted) return;
-      (async () => {
-        try {
-          const res = await apiFetch(`${API}/auth/get-posts/${userId}`);
-          const data = await res.json();
-          if (data.success) setPosts(data.posts);
-        } catch {}
-      })();
+      fetchPosts();
     };
 
     const onUserAccountDeleted = ({ userId: deletedId }) => {
@@ -624,7 +559,7 @@ function UserProfileView() {
       socket.off("collabResponded", onCollabResponded);
       socket.off("userAccountDeleted", onUserAccountDeleted);
     };
-  }, [userId, myId, navigation]);
+  }, [userId, myId, navigation, fetchPosts]);
 
   const openModal = (type) => {
     if (!canSeeFollowList) return;
@@ -638,7 +573,6 @@ function UserProfileView() {
   const closeModal = () => { setListModal(null); setSearchQuery(""); setModalList([]); };
   const filteredList = modalList.filter(u => u.username?.toLowerCase().includes(searchQuery.toLowerCase()));
 
-  // ── window.confirm → Alert.alert ──────────────────────────────────────
   const handleBlockUserBtn = () => {
     if (isBlocked) return;
     Alert.alert("Block user", `Block ${user?.username}?`, [
@@ -650,7 +584,7 @@ function UserProfileView() {
           try {
             const res = await apiFetch(`${API}/auth/block/${userId}`, { method: "POST" });
             const data = await res.json();
-            if (data.success) setIsBlocked(true);
+            if (data.success) setBlocked(userId, true);
           } catch {}
         },
       },
@@ -758,7 +692,18 @@ function UserProfileView() {
         </TouchableOpacity>
       </Modal>
 
-      <ScrollView ref={scrollViewRef} style={{ flex: 1 }}>
+      <ScrollView
+        ref={scrollViewRef}
+        style={{ flex: 1 }}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor="rgb(234,182,118)"
+            colors={["rgb(234,182,118)"]}
+          />
+        }
+      >
 
         {/* ── Top Bar ── */}
         <View style={styles.topBar}>
@@ -900,10 +845,14 @@ function UserProfileView() {
                 </TouchableOpacity>
               ))}
             </View>
-            <View style={{ padding: 10 }} {...tabPanResponder.panHandlers}>
-              {activeTab === "posts" && <Posts posts={posts} navigation={navigation} userId={userId} itemRefs={itemRefs} />}
-              {activeTab === "Shorts" && <Shorts posts={posts} userId={userId} navigation={navigation} itemRefs={itemRefs} />}
-              {activeTab === "text" && <TextPosts posts={posts} navigation={navigation} userId={userId} itemRefs={itemRefs} />}
+
+            {/* ── Tab content: slides with your finger ── */}
+            <View style={{ overflow: "hidden" }} {...tabSwipe.panHandlers}>
+              <Animated.View style={{ padding: 10, transform: [{ translateX: tabSwipe.x }] }}>
+                {activeTab === "posts" && <Posts posts={posts} navigation={navigation} userId={userId} itemRefs={itemRefs} />}
+                {activeTab === "Shorts" && <Shorts posts={posts} userId={userId} navigation={navigation} itemRefs={itemRefs} />}
+                {activeTab === "text" && <TextPosts posts={posts} navigation={navigation} userId={userId} itemRefs={itemRefs} />}
+              </Animated.View>
             </View>
           </>
         )}
@@ -912,11 +861,11 @@ function UserProfileView() {
       {/* ── STORY PREVIEW OVERLAY ── */}
       {showStoryPreview && hasStory && (
         <StoryViewer
-  stories={[story]}
-  index={0}
-  close={() => setShowStoryPreview(false)}
-  currentUserId={myId}
-/>
+          stories={[story]}
+          index={0}
+          close={() => setShowStoryPreview(false)}
+          currentUserId={myId}
+        />
       )}
 
       {/* ── MEMORY VIEWER OVERLAY (view-only) ── */}
@@ -928,12 +877,6 @@ function UserProfileView() {
           initialSheet={memoryViewer.sheet}
           initialCommentId={memoryViewer.commentId}
           initialReplyId={memoryViewer.replyId}
-          // ← FIXED — belt-and-suspenders against "Cannot update a
-          // component (`UserProfileView`) while rendering a different
-          // component (`MemoryViewer`)", same reasoning as
-          // ProfilePage.js. MemoryViewer.js already defers its own
-          // risky call site, but deferring the actual setState here
-          // too keeps this screen safe regardless.
           onClose={() => setTimeout(() => setMemoryViewer(null), 0)}
           onGroupEmptied={() => setTimeout(() => { setMemoryViewer(null); fetchGroups(); }, 0)}
         />
@@ -1006,7 +949,6 @@ const Shorts = ({ posts, userId, navigation, itemRefs }) => {
   );
 };
 
-// ── Expandable text for the Text tab ────────────────────────────────────
 const ExpandableProfileText = ({ text, limit = 180 }) => {
   const [expanded, setExpanded] = useState(false);
   if (!text) return null;

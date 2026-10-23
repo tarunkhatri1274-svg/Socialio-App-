@@ -69,6 +69,9 @@ function CreateVideoPost() {
   // ── tags ──────────────────────────────────────────────────────────────
   const [tagInput, setTagInput] = useState("");
   const [tags, setTags] = useState([]);
+  const [tagResults, setTagResults] = useState([]);
+  const [searchingTag, setSearchingTag] = useState(false);
+  const tagTimer = useRef(null);
 
   // ── collaborators ─────────────────────────────────────────────────────
   const [collabSearch, setCollabSearch] = useState("");
@@ -104,12 +107,41 @@ function CreateVideoPost() {
   const video = state.file;
 
   // ── tag handlers ───────────────────────────────────────────────────────
-  const addTag = () => {
-    const t = tagInput.trim().toLowerCase().replace(/\s+/g, "_");
+  const addTag = (override) => {
+    // `override` is a username picked from the suggestion list; otherwise
+    // we use whatever is typed in the box (plain tags still work).
+    const raw = typeof override === "string" ? override : tagInput;
+    const t = raw.trim().replace(/^[@#]/, "").toLowerCase().replace(/\s+/g, "_");
     if (!t || tags.includes(t)) return;
     setTags((prev) => [...prev, t]);
     setTagInput("");
+    setTagResults([]);
   };
+
+  // ── tag suggestions: search users while typing (same endpoint as collab) ──
+  const handleTagInput = (val) => {
+    setTagInput(val);
+    clearTimeout(tagTimer.current);
+    const q = val.trim().replace(/^[@#]/, "");
+    if (!q) {
+      setTagResults([]);
+      setSearchingTag(false);
+      return;
+    }
+    setSearchingTag(true);
+    tagTimer.current = setTimeout(async () => {
+      try {
+        const res = await apiFetch(`${API}/auth/search?q=${encodeURIComponent(q)}`);
+        const data = await res.json();
+        const list = Array.isArray(data) ? data : data.users || [];
+        setTagResults(
+          list.filter((u) => u.username && !tags.includes(u.username.toLowerCase())).slice(0, 6)
+        );
+      } catch {}
+      setSearchingTag(false);
+    }, 300);
+  };
+  const pickTagUser = (user) => addTag(user.username);
   const removeTag = (t) => setTags((prev) => prev.filter((x) => x !== t));
 
   // ── collab search ──────────────────────────────────────────────────────
@@ -231,15 +263,26 @@ function CreateVideoPost() {
           <View style={styles.tagInputRow}>
             <TextInput
               value={tagInput}
-              onChangeText={setTagInput}
+              onChangeText={handleTagInput}
               onSubmitEditing={addTag}
-              placeholder="Add a tag..."
+              placeholder="Tag people or add a tag..."
               style={styles.smallInput}
             />
             <TouchableOpacity onPress={addTag} style={styles.addBtn}>
               <Text style={{ fontSize: 13, fontWeight: "700" }}>Add</Text>
             </TouchableOpacity>
           </View>
+          {tagResults.length > 0 && (
+            <View style={styles.searchResults}>
+              {tagResults.map((u) => (
+                <TouchableOpacity key={u._id} style={styles.searchResultItem} onPress={() => pickTagUser(u)}>
+                  <MiniAvatar user={u} />
+                  <Text style={{ fontSize: 13, fontWeight: "600" }}>{u.username}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+          {searchingTag && <Text style={{ fontSize: 12, color: "#aaa", marginVertical: 6 }}>Searching...</Text>}
           {tags.length > 0 && (
             <View style={styles.tagWrap}>
               {tags.map((t) => (

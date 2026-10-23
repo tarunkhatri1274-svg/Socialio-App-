@@ -161,7 +161,11 @@ function MainTabs() {
   return (
     <Tab.Navigator
       tabBar={() => null}
-      screenOptions={{ headerShown: false, lazy: false }}
+      screenOptions={{
+        headerShown: false,
+        lazy: false,
+        animation: 'fade',   // needs @react-navigation/bottom-tabs v7+
+      }}
     >
       <Tab.Screen name="Home" component={Homepage} />
       <Tab.Screen name="Search" component={Explore} />

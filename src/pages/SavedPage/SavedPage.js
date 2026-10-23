@@ -10,7 +10,9 @@ import {
   findNodeHandle,
   FlatList,
   PanResponder,
+  Animated
 } from "react-native";
+import { useSwipeTabs } from "../../hooks/useRefreshAndSwipe";
 import Video from "react-native-video";
 import FeatherIcon from "react-native-vector-icons/Feather";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -28,7 +30,7 @@ function SavedPage() {
   const [savedPosts, setSavedPosts] = useState([]);
   const [savedVideos, setSavedVideos] = useState([]);
   const [savedTexts, setSavedTexts] = useState([]);
-
+const tabSwipe = useSwipeTabs({ order: SAVED_TAB_ORDER, activeTab, setActiveTab });
   const scrollViewRef = useRef(null);
   // id -> node ref, registered by each grid cell / text card as it renders
   const itemRefs = useRef({});
@@ -36,30 +38,30 @@ function SavedPage() {
   // ── Swipe left/right on the tab content to move to the next/previous tab.
   // Only claims the gesture once the drag is clearly more horizontal than
   // vertical, so the vertical scroll of the grid/list keeps working normally.
-  const goToAdjacentTab = useCallback((direction) => {
-    setActiveTab((current) => {
-      const idx = SAVED_TAB_ORDER.indexOf(current);
-      if (idx === -1) return current;
-      const nextIdx = idx + direction;
-      if (nextIdx < 0 || nextIdx >= SAVED_TAB_ORDER.length) return current;
-      return SAVED_TAB_ORDER[nextIdx];
-    });
-  }, []);
+  // const goToAdjacentTab = useCallback((direction) => {
+  //   setActiveTab((current) => {
+  //     const idx = SAVED_TAB_ORDER.indexOf(current);
+  //     if (idx === -1) return current;
+  //     const nextIdx = idx + direction;
+  //     if (nextIdx < 0 || nextIdx >= SAVED_TAB_ORDER.length) return current;
+  //     return SAVED_TAB_ORDER[nextIdx];
+  //   });
+  // }, []);
 
-  const tabPanResponder = useRef(
-    PanResponder.create({
-      onMoveShouldSetPanResponder: (_evt, gestureState) =>
-        Math.abs(gestureState.dx) > SWIPE_HORIZONTAL_THRESHOLD &&
-        Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * SWIPE_DIRECTION_RATIO,
-      onPanResponderRelease: (_evt, gestureState) => {
-        if (gestureState.dx <= -SWIPE_RELEASE_THRESHOLD) {
-          goToAdjacentTab(1); // swipe left → next tab
-        } else if (gestureState.dx >= SWIPE_RELEASE_THRESHOLD) {
-          goToAdjacentTab(-1); // swipe right → previous tab
-        }
-      },
-    })
-  ).current;
+  // const tabPanResponder = useRef(
+  //   PanResponder.create({
+  //     onMoveShouldSetPanResponder: (_evt, gestureState) =>
+  //       Math.abs(gestureState.dx) > SWIPE_HORIZONTAL_THRESHOLD &&
+  //       Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * SWIPE_DIRECTION_RATIO,
+  //     onPanResponderRelease: (_evt, gestureState) => {
+  //       if (gestureState.dx <= -SWIPE_RELEASE_THRESHOLD) {
+  //         goToAdjacentTab(1); // swipe left → next tab
+  //       } else if (gestureState.dx >= SWIPE_RELEASE_THRESHOLD) {
+  //         goToAdjacentTab(-1); // swipe right → previous tab
+  //       }
+  //     },
+  //   })
+  // ).current;
 
   const loadFromStorage = useCallback(async () => {
     try {
@@ -231,20 +233,23 @@ const handleUnsave = (post) => {
       </View>
 
       {/* Content */}
-      <View style={{ flex: 1 }} {...tabPanResponder.panHandlers}>
-        <ScrollView ref={scrollViewRef} style={{ flex: 1 }}>
-          {activeTab === "posts" && (
-            <PostsGrid posts={savedPosts} onPress={goToPost} onUnsave={handleUnsave} itemRefs={itemRefs} />
-          )}
-          {activeTab === "videos" && (
-            <VideosGrid videos={savedVideos} onPress={goToVideo} onUnsave={handleUnsave} itemRefs={itemRefs} />
-          )}
-          {activeTab === "texts" && (
-            <TextList texts={savedTexts} onPress={goToText} onUnsave={handleUnsave} itemRefs={itemRefs} />
-          )}
-        </ScrollView>
+<View style={{ flex: 1, overflow: "hidden" }} {...tabSwipe.panHandlers}>
+  <Animated.View style={{ flex: 1, transform: [{ translateX: tabSwipe.x }] }}>
+    <ScrollView ref={scrollViewRef} style={{ flex: 1 }}>
+      {activeTab === "posts" && (
+        <PostsGrid posts={savedPosts} onPress={goToPost} onUnsave={handleUnsave} itemRefs={itemRefs} />
+      )}
+      {activeTab === "videos" && (
+        <VideosGrid videos={savedVideos} onPress={goToVideo} onUnsave={handleUnsave} itemRefs={itemRefs} />
+      )}
+      {activeTab === "texts" && (
+        <TextList texts={savedTexts} onPress={goToText} onUnsave={handleUnsave} itemRefs={itemRefs} />
+      )}
+    </ScrollView>
+  </Animated.View>
+</View>
       </View>
-    </View>
+    
   );
 }
 

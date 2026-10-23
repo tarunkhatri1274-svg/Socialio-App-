@@ -12,8 +12,9 @@ import {
 } from "react-native";
 import { useNavigation, useRoute } from "@react-navigation/native";
 import FeatherIcon from "react-native-vector-icons/Feather";
-import { apiFetch, getCachedUser } from "../../api/authToken"; // adjust relative path — count folders to src/api/authToken.js
+import { apiFetch, getCachedUser, getAuthToken } from "../../api/authToken"; // adjust relative path — count folders to src/api/authToken.js
 import Config from "react-native-config";
+import ReactNativeBlobUtil from "react-native-blob-util";
 // TODO: cropimage.js used <canvas> to bake the crop rectangle + CSS
 // filter into a single flattened image, returning a web Blob — there's no
 // canvas/Blob in RN. You'll need a native equivalent (e.g.
@@ -23,13 +24,16 @@ import Config from "react-native-config";
 // Keeping the same call contract here — pass in the source uri + this
 // item's crop rect + filter name, get back { uri, type, name } ready to
 // drop straight into FormData below.
-import getEditedImage from "./CropImage";
+import getEditedImage, { inspectImageFile, isUsableImage } from "./CropImage";
 
 const API = Config.API_URL;
 // Client-side size guard — this upload path enforces MAX_IMAGE_BYTES using
 // the original picked file's reported size, same as the web version's
 // pre-Cloudinary check.
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10MB
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Render answers 502/503/504 while a sleeping instance wakes up — worth another try.
+const RETRY_STATUS = [502, 503, 504];
 
 
 
@@ -88,6 +92,9 @@ function CreateImagePost() {
   // ── tags ──────────────────────────────────────────────────────────────
   const [tagInput, setTagInput] = useState("");
   const [tags, setTags] = useState([]);
+  const [tagResults, setTagResults] = useState([]);
+  const [searchingTag, setSearchingTag] = useState(false);
+  const tagTimer = useRef(null);
 
   // ── collaborators ─────────────────────────────────────────────────────
   const [collabSearch, setCollabSearch] = useState("");
@@ -128,12 +135,41 @@ function CreateImagePost() {
   }
 
   // ── tag handlers ───────────────────────────────────────────────────────
-  const addTag = () => {
-    const t = tagInput.trim().toLowerCase().replace(/\s+/g, "_");
+  const addTag = (override) => {
+    // `override` is a username picked from the suggestion list; otherwise
+    // we use whatever is typed in the box (plain tags still work).
+    const raw = typeof override === "string" ? override : tagInput;
+    const t = raw.trim().replace(/^[@#]/, "").toLowerCase().replace(/\s+/g, "_");
     if (!t || tags.includes(t)) return;
     setTags((prev) => [...prev, t]);
     setTagInput("");
+    setTagResults([]);
   };
+
+  // ── tag suggestions: search users while typing (same endpoint as collab) ──
+  const handleTagInput = (val) => {
+    setTagInput(val);
+    clearTimeout(tagTimer.current);
+    const q = val.trim().replace(/^[@#]/, "");
+    if (!q) {
+      setTagResults([]);
+      setSearchingTag(false);
+      return;
+    }
+    setSearchingTag(true);
+    tagTimer.current = setTimeout(async () => {
+      try {
+        const res = await apiFetch(`${API}/auth/search?q=${encodeURIComponent(q)}`);
+        const data = await res.json();
+        const list = Array.isArray(data) ? data : data.users || [];
+        setTagResults(
+          list.filter((u) => u.username && !tags.includes(u.username.toLowerCase())).slice(0, 6)
+        );
+      } catch {}
+      setSearchingTag(false);
+    }, 300);
+  };
+  const pickTagUser = (user) => addTag(user.username);
   const removeTag = (t) => setTags((prev) => prev.filter((x) => x !== t));
 
   // ── collab search ──────────────────────────────────────────────────────
@@ -172,41 +208,110 @@ function CreateImagePost() {
   // size/type enforcement via uploadPostMedia (media.controllers.js),
   // instead of only the client-side MAX_IMAGE_BYTES check below.
   const uploadToBackend = async (editedFile, index) => {
-    const formData = new FormData();
-    // RN's fetch/FormData wants { uri, type, name } for file parts, not a
-    // raw Blob like the browser version — getEditedImage returns that
-    // shape directly, and so does the capturedUris path below.
-    //
-    // Some Android devices/OS versions have
-    // @react-native-community/image-editor's cropImage() (and, per the
-    // same class of bug, react-native-view-shot's capture()) return a
-    // bare filesystem path with no "file://" scheme. RN's fetch/
-    // FormData can't read the file into the multipart body without a
-    // scheme — it fails silently with a generic "Network request
-    // failed" before any actual network call happens. Normalize it here
-    // as a guard.
+    // Android can hand back a bare path with no scheme; RN needs one.
     let uri = editedFile.uri;
-    if (uri && !/^(file|content|http|https):\/\//.test(uri)) {
-      uri = `file://${uri}`;
+    if (uri && !/^(file|content|http|https):\/\//.test(uri)) uri = `file://${uri}`;
+    const name = editedFile.name || `image_${index}.jpg`;
+    const type = editedFile.type || "image/jpeg";
+
+    // Pre-flight: make sure the edited image really exists and isn't empty, so a
+    // missing/0-byte capture gives a clear message instead of a vague network error.
+    let path = null; // raw filesystem path (only for file:// uris), used by blob-util
+    if (uri && uri.startsWith("file://")) {
+      path = decodeURIComponent(uri.replace("file://", ""));
+      const status = await inspectImageFile(uri);
+      console.log(`[UPLOAD] #${index} ${uri} size=${status.size} decodes=${status.decodes}`);
+      if (!isUsableImage(status)) {
+        throw new Error("The edited image file is missing or empty. Please go back, edit the photo again, and retry.");
+      }
+      if (status.size && status.size > MAX_IMAGE_BYTES) {
+        throw new Error("This image is over the 10MB limit. Please choose a smaller one.");
+      }
     }
 
-    formData.append("file", {
-      uri,
-      type: editedFile.type || "image/jpeg",
-      name: editedFile.name || `image_${index}.jpg`,
-    });
+    // ── Method A: react-native-blob-util. Streams the file straight from disk with
+    // its own HTTP client and, unlike RN's fetch (which turns every native failure
+    // into the same "Network request failed"), rejects with the REAL native error
+    // (timeout, connection reset, host unreachable...). That message is logged below.
+    const viaBlobUtil = async () => {
+      const send = async (token) => {
+        const resp = await ReactNativeBlobUtil.config({ timeout: 60000 }).fetch(
+          "POST",
+          `${API}/auth/upload-media`,
+          {
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            "Content-Type": "multipart/form-data",
+          },
+          [{ name: "file", filename: name, type, data: ReactNativeBlobUtil.wrap(path) }]
+        );
+        return { status: resp.info().status, text: resp.text() };
+      };
+      let r = await send(await getAuthToken());
+      if (r.status === 401) {
+        // Token expired: any apiFetch call runs the app's own refresh-token logic.
+        await apiFetch(`${API}/auth/profile`);
+        r = await send(await getAuthToken());
+      }
+      return r;
+    };
 
-    const res = await apiFetch(`${API}/auth/upload-media`, {
-      method: "POST",
-      body: formData, // apiFetch detects FormData and skips forcing Content-Type
-    });
-    if (!res.ok) throw new Error("Upload failed");
-    const data = await res.json();
-    if (!data.url && !data.secure_url) throw new Error(data.message || "Upload failed");
-    return data.url || data.secure_url;
+    // ── Method B: the app's normal apiFetch + FormData (also handles 401 refresh).
+    const viaFetch = async () => {
+      // Rebuilt for every send: RN reads the file once per request.
+      const formData = new FormData();
+      formData.append("file", { uri, type, name });
+      const res = await apiFetch(`${API}/auth/upload-media`, { method: "POST", body: formData });
+      return { status: res.status, text: await res.text() };
+    };
+
+    const methods = [];
+    if (path) methods.push(["blob-util", viaBlobUtil]);
+    methods.push(["fetch", viaFetch]);
+
+    const MAX_TRIES = 2;
+    let lastErr;
+    for (let attempt = 1; attempt <= MAX_TRIES; attempt++) {
+      for (const [label, send] of methods) {
+        try {
+          const { status, text } = await send();
+          console.log(`[UPLOAD] #${index} attempt ${attempt} via ${label} -> ${status}`, String(text).slice(0, 160));
+          let data = {};
+          try { data = JSON.parse(text); } catch {}
+
+          if (status >= 200 && status < 300) {
+            const url = data.url || data.secure_url;
+            if (url) return url;
+          }
+          const err = new Error(data.message || `Upload failed (${status})`);
+          err.http = true; // the server DID answer
+          err.status = status;
+          throw err;
+        } catch (e) {
+          lastErr = e;
+          console.log(`[UPLOAD] #${index} attempt ${attempt} via ${label} failed:`, e?.message);
+          // A real server answer (400, 413, 500 + its message...) is the answer: show it, don't mask it.
+          if (e.http && !RETRY_STATUS.includes(e.status)) throw e;
+          // Otherwise (connection-level failure, or 502/503/504): try the next method / attempt.
+        }
+      }
+      if (attempt < MAX_TRIES) await sleep(1500); // let a sleeping Render instance / dropped connection recover
+    }
+
+    // Still failing at connection level: find out whether the server is reachable at all.
+    let reachable = false;
+    try {
+      const ping = await apiFetch(`${API}/auth/profile`);
+      reachable = ping.status < 500;
+    } catch {}
+    console.log(`[UPLOAD] server reachable after failure: ${reachable} | last error: ${lastErr?.message}`);
+    const friendly = reachable
+      ? "The connection dropped while sending the image. Please try again."
+      : "Can't reach the server. Check your internet connection and try again.";
+    throw new Error(__DEV__ ? `${friendly}\n\n(${lastErr?.message})` : friendly);
   };
 
   const handlePost = async () => {
+    if (loading) return; // ignore extra taps while an upload is running
     try {
       const oversized = files.filter((f) => f && f.size > MAX_IMAGE_BYTES);
       if (oversized.length > 0) {
@@ -225,9 +330,18 @@ function CreateImagePost() {
         // as-is. Only fall back to getEditedImage() (crop the raw
         // source using a guessed rect) for an image with no capture,
         // e.g. if the frame capture failed for some reason.
-        const edited = capturedUris[i]
-          ? { uri: capturedUris[i], type: "image/jpeg", name: `edited-${i}.jpg` }
-          : await getEditedImage(images[i], crops[i], filters[i]);
+        let edited = null;
+        if (capturedUris[i]) {
+          const status = await inspectImageFile(capturedUris[i]);
+          console.log(`[UPLOAD] #${i} capture ${capturedUris[i]} size=${status.size} decodes=${status.decodes}`);
+          if (isUsableImage(status)) {
+            edited = { uri: capturedUris[i], type: "image/jpeg", name: `edited-${i}.jpg` };
+          } else {
+            // The screenshot file is empty/missing — rebuild this image from the source.
+            console.log(`[UPLOAD] #${i} captured file is unusable, rebuilding from source`);
+          }
+        }
+        if (!edited) edited = await getEditedImage(images[i], crops[i], filters[i]);
         const url = await uploadToBackend(edited, i);
         uploadedUrls.push(url);
       }
@@ -255,8 +369,10 @@ function CreateImagePost() {
       });
       const data = await res.json();
       if (data.success) navigation.reset({ index: 0, routes: [{ name: "MainTabs", params: { screen: "Profile" } }] });
+      else Alert.alert("Couldn't post", data.message || "Something went wrong. Please try again.");
     } catch (error) {
       console.log("POST ERROR:", error);
+      Alert.alert("Couldn't post", error?.message || "Something went wrong. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -331,15 +447,26 @@ function CreateImagePost() {
           <View style={styles.tagInputRow}>
             <TextInput
               value={tagInput}
-              onChangeText={setTagInput}
+              onChangeText={handleTagInput}
               onSubmitEditing={addTag}
-              placeholder="Add a tag..."
+              placeholder="Tag people or add a tag..."
               style={styles.smallInput}
             />
             <TouchableOpacity onPress={addTag} style={styles.addBtn}>
               <Text style={{ fontSize: 13, fontWeight: "700" }}>Add</Text>
             </TouchableOpacity>
           </View>
+          {tagResults.length > 0 && (
+            <View style={styles.searchResults}>
+              {tagResults.map((u) => (
+                <TouchableOpacity key={u._id} style={styles.searchResultItem} onPress={() => pickTagUser(u)}>
+                  <MiniAvatar user={u} />
+                  <Text style={{ fontSize: 13, fontWeight: "600" }}>{u.username}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+          {searchingTag && <Text style={{ fontSize: 12, color: "#aaa", marginVertical: 6 }}>Searching...</Text>}
           {tags.length > 0 && (
             <View style={styles.tagWrap}>
               {tags.map((t) => (

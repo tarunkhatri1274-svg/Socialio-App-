@@ -19,20 +19,19 @@ import {
   Platform,
   PermissionsAndroid,
   StyleSheet,
+  RefreshControl
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { apiFetch, getCachedUser, updateCachedUser, useAuth } from "../../api/authToken";
+import { useBlockedIds, subscribeBlocked, loadBlockedStore } from "../../components/State/BlockStore";
+import { useRefresh } from "../../hooks/useRefreshAndSwipe"; // adjust ../ depth per file
+import usePostOptions, { getOptionState, subscribeOptionChanges } from "../../components/PostCard/usePostOptions";
+import { recordPostView } from "../../components/State/ViewStore";
 import Icon from "react-native-vector-icons/FontAwesome5";
 import FeatherIcon from "react-native-vector-icons/Feather";
 import Video from "react-native-video";
 import ReactNativeBlobUtil from "react-native-blob-util";
 import { CameraRoll } from "@react-native-camera-roll/camera-roll";
-import {
-  RTCPeerConnection,
-  RTCSessionDescription,
-  RTCIceCandidate,
-  RTCView,
-} from "react-native-webrtc";
 import { loadMutedMap, getMutedMap, subscribeMuted } from "../../components/State/MuteStore";
 import Config from "react-native-config";
 import SocialioNativeAd from '../../components/Ads/SocialioNativeAd';
@@ -45,6 +44,7 @@ import { carouselTouchProps } from "../../components/carouselTouch";
 import Navbar, { useSwipeToChangeTab, subscribeTabReload, setCommentsOpen } from "../../components/Navbar/Navbar";
 import StoriesBar from "../../components/StoryBar/StoriesBar";
 import StoryViewer from "../../components/StoryBar/StoryViewer";
+import FeedStoryPreview from "../../components/StoryBar/FeedStoryPreview";
 import socket from "../../sockets/Sockets";
 import ShareSheet from "../../components/PostCard/ShareSheet";
 import CommentSection from "../../components/PostCard/CommentSection";
@@ -54,13 +54,6 @@ import {
   removeFollowing,
   initFollowStore,
 } from "../Profile/UseFollowState";
-import {
-  getStoryRuntime,
-  subscribeStory,
-  pushComment,
-  setRuntimeComments,
-  setLikeState,
-} from "../../components/State/SyncStoryStore";
 import {
   isPostSaved,
   toggleSavedPost,
@@ -344,632 +337,6 @@ function LikesSummary({ likedByUsers, likesCount, hideLikeCount, isOwner, onOpen
   );
 }
 
-const FEED_PREVIEW_REACTIONS = ["❤️", "😂", "😮", "🔥", "👏"];
-
-/* ─── text overlays + mentions drawn over story media. RN supports percentage
-   strings for left/top offsets, so the original % positioning carries over. ─── */
-function StoryOverlayLayer({ slide, isLiveSlide, navigation, onNavigateAway }) {
-  const { user: currentUser } = useAuth();
-  if (isLiveSlide) return null;
-  const hasText = slide.textOverlays?.length > 0;
-  const hasMentions = slide.mentions?.length > 0;
-  if (!hasText && !hasMentions) return null;
-
-  // FIX: tapping your own mention used to open the generic "UserProfile"
-  // viewer instead of your real Profile tab.
-  const currentUserId = (currentUser?._id || currentUser?.id)?.toString();
-  const goToMentioned = (userId) => {
-    if (!userId) return;
-    onNavigateAway?.();
-    if (userId?.toString() === currentUserId) {
-      navigation.navigate("MainTabs", { screen: "Profile" });
-    } else {
-      navigation.navigate("UserProfile", { userId });
-    }
-  };
-
-  return (
-    <View style={styles.storyOverlayLayer} pointerEvents="box-none">
-      {(slide.textOverlays || []).map((t, i) => (
-        <View
-          key={`text-${i}`}
-          style={{
-            position: "absolute",
-            left: `${t.x}%`,
-            top: `${t.y}%`,
-            transform: [{ translateX: -0.5 }, { translateY: -0.5 }],
-            maxWidth: "80%",
-          }}
-        >
-          <Text
-            style={{
-              color: t.color || "#fff",
-              fontSize: t.fontSize || 20,
-              fontWeight: "700",
-              textAlign: t.align || "center",
-            }}
-          >
-            {t.text}
-          </Text>
-        </View>
-      ))}
-      {(slide.mentions || []).map((m, i) => (
-        <TouchableOpacity
-          key={`mention-${i}`}
-          onPress={() => goToMentioned(m.user)}
-          style={{
-            position: "absolute",
-            left: `${m.x}%`,
-            top: `${m.y}%`,
-            backgroundColor: "rgba(255,255,255,0.92)",
-            borderRadius: 20,
-            paddingHorizontal: 10,
-            paddingVertical: 5,
-          }}
-        >
-          <Text style={{ color: "#111", fontSize: 11.5, fontWeight: "700" }}>
-            @{m.username || "user"}
-          </Text>
-        </TouchableOpacity>
-      ))}
-    </View>
-  );
-}
-
-function RepostAttributionBadge({ slide, isLiveSlide, navigation, onNavigateAway }) {
-  const { user: currentUser } = useAuth();
-  if (isLiveSlide || !slide.repostAttribution?.username) return null;
-  const { user, username, profilePic } = slide.repostAttribution;
-  // FIX: tapping your own repost attribution used to open the generic
-  // "UserProfile" viewer instead of your real Profile tab.
-  const currentUserId = (currentUser?._id || currentUser?.id)?.toString();
-  return (
-    <TouchableOpacity
-      onPress={() => {
-        if (!user) return;
-        onNavigateAway?.();
-        if (user?.toString() === currentUserId) {
-          navigation.navigate("MainTabs", { screen: "Profile" });
-        } else {
-          navigation.navigate("UserProfile", { userId: user });
-        }
-      }}
-      style={styles.repostBadge}
-    >
-      {profilePic ? (
-        <Image source={{ uri: profilePic }} style={{ width: 16, height: 16, borderRadius: 8 }} />
-      ) : (
-        <View style={styles.repostBadgeLetter}>
-          <Text style={{ color: "#fff", fontSize: 8, fontWeight: "700" }}>
-            {username[0]?.toUpperCase()}
-          </Text>
-        </View>
-      )}
-      <Text style={{ color: "#fff", fontSize: 10.5, fontWeight: "600" }}>
-        Story by @{username}
-      </Text>
-    </TouchableOpacity>
-  );
-}
-
-/* ─────────────────────────── FeedStoryPreview (full-screen Modal) ─────────────────────────── */
-// NEW: `onSheetOpen` — fires whenever this preview's own share/viewers
-// sheets open or close, so Homepage can drop the Navbar's zIndex behind
-// them (see the Navbar wrapper at the bottom of Homepage's return).
-function FeedStoryPreview({ story, onClose, navigation, onSheetOpen, initialShowViewers = false, initialStoryId = null }) {
-  const { user: currentUser } = useAuth();
-  const currentUserId = (currentUser?._id || currentUser?.id)?.toString();
-
-  const [slideIndex, setSlideIndex] = useState(0);
-  const [liked, setLiked] = useState(false);
-  const [likesCount, setLikesCount] = useState(0);
-  const [viewers, setViewers] = useState([]);
-  const [isHidden, setIsHidden] = useState(false);
-  const [comment, setComment] = useState("");
-  const [showMenu, setShowMenu] = useState(false);
-  const [showShareSheet, setShowShareSheet] = useState(false);
-  // ← NEW — a story_view/story_like notification asks this preview to
-  // land with the Viewers sheet already open (see pendingOpenStoryShowViewers
-  // above, consumed once in Homepage and passed down as this initial value).
-  const [showViewers, setShowViewers] = useState(initialShowViewers);
-  const [liveComments, setLiveComments] = useState([]);
-  const [floatingEmojis, setFloatingEmojis] = useState([]);
-  const [accessDenied, setAccessDenied] = useState(null);
-
-  useEffect(() => {
-    onSheetOpen?.(showShareSheet || showViewers);
-  }, [showShareSheet, showViewers]);
-
-const slides = story?.slides || [];
-const slide = slides[slideIndex] || {};
-const isOwn = !!story?.isOwn || (currentUserId && story?.id?.toString() === currentUserId);
-  const isLiveSlide = slide?.type === "live" || slide?.isLive === true;
-  const isVideo = slide.type === "video" || slide.image?.includes(".mp4") || slide.image?.includes("video");
-
-  // FIXED — this always reset to the reel's first slide, regardless of
-  // which specific story a story_like/story_view notification was
-  // actually about (the id was being validated on the backend but never
-  // carried through to here — see setPendingOpenStoryId() above). Now it
-  // jumps to that slide when one was requested, and otherwise falls back
-  // to slide 0 as before. `story?.id` is still the trigger — this only
-  // needs to run once per distinct author's reel being opened, not on
-  // every slideIndex change from handlePrev/handleNext.
-  useEffect(() => {
-    if (initialStoryId) {
-      const idx = slides.findIndex((s) => s._id === initialStoryId);
-      setSlideIndex(idx >= 0 ? idx : 0);
-    } else {
-      setSlideIndex(0);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [story?.id]);
-
-  useEffect(() => {
-    if (!slide?.id) return;
-    socket.emit("joinStory", { storyId: slide.id, viewerId: currentUserId });
-    return () => socket.emit("leaveStory", slide.id);
-  }, [slide?.id, currentUserId]);
-
-  useEffect(() => {
-    if (!slide?.id) return;
-    setShowMenu(false);
-    setAccessDenied(null);
-
-    const runtime = getStoryRuntime(slide.id);
-    setLiveComments(runtime.comments);
-    setLikesCount(runtime.likesCount);
-    setLiked(runtime.liked);
-
-    const fetchData = async () => {
-      try {
-        if (isOwn) {
-          const res = await apiFetch(`${API}/stories/viewers/${slide.id}`);
-          const data = await res.json();
-          if (data.success) {
-            setViewers(data.viewers ?? []);
-            const likedNow = (data.likedBy ?? []).some((u) => u._id?.toString() === currentUserId);
-            setLikesCount(data.likesCount ?? 0);
-            setLiked(likedNow);
-            setIsHidden(slide.isHiddenFromNonFollowers || false);
-            setLikeState(slide.id, { likesCount: data.likesCount ?? 0, liked: likedNow });
-          }
-        } else if (!isLiveSlide) {
-          const res = await apiFetch(`${API}/stories/like-state/${slide.id}`);
-          if (res.status === 403) {
-            setAccessDenied("not_following");
-            return;
-          }
-          const data = await res.json();
-          if (data.success) {
-            setLikesCount(data.likesCount ?? 0);
-            setLiked(!!data.liked);
-            setLikeState(slide.id, { likesCount: data.likesCount ?? 0, liked: !!data.liked });
-          }
-          apiFetch(`${API}/stories/view-story/${slide.id}`, { method: "PUT" }).catch(() => {});
-        }
-
-        if (!runtime.commentsFetched) {
-          try {
-            const cRes = await apiFetch(`${API}/stories/comments/${slide.id}`);
-            const cData = await cRes.json();
-            if (cData?.success && Array.isArray(cData.comments)) setRuntimeComments(slide.id, cData.comments);
-          } catch {}
-        }
-      } catch {}
-    };
-    fetchData();
-
-    const unsubscribe = subscribeStory(slide.id, (s) => {
-      setLiveComments(s.comments);
-      setLikesCount(s.likesCount);
-      setLiked(s.liked);
-    });
-
-    const onLikes = ({ likesCount: count }) => setLikeState(slide.id, { likesCount: count });
-    const onComment = (payload) => {
-      pushComment(slide.id, payload);
-      if (FEED_PREVIEW_REACTIONS.includes(payload.text)) {
-        const id = Date.now() + Math.random();
-        setFloatingEmojis((prev) => [...prev.slice(-5), { id, emoji: payload.text }]);
-        setTimeout(() => setFloatingEmojis((prev) => prev.filter((e) => e.id !== id)), 2200);
-      }
-    };
-    socket.on(`story:${slide.id}:likes`, onLikes);
-    socket.on(`story:${slide.id}:comment`, onComment);
-    return () => {
-      socket.off(`story:${slide.id}:likes`, onLikes);
-      socket.off(`story:${slide.id}:comment`, onComment);
-      unsubscribe();
-    };
-  }, [slide?.id, isOwn, isLiveSlide]);
-
-  /* ── live streaming via react-native-webrtc ── */
-  const [liveStatus, setLiveStatus] = useState(null);
-  const [liveStream, setLiveStream] = useState(null);
-  const livePcRef = useRef(null);
-
-  useEffect(() => {
-    if (!isLiveSlide || !slide?.liveRoomId) {
-      setLiveStatus(null);
-      setLiveStream(null);
-      return;
-    }
-
-    setLiveStatus("connecting");
-    setLiveStream(null);
-
-    const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
-    livePcRef.current = pc;
-
-    pc.ontrack = (event) => {
-      if (event.streams?.[0]) {
-        setLiveStream(event.streams[0]);
-        setLiveStatus("live");
-      }
-    };
-
-    const iceBuffer = [];
-
-    const handleOffer = async ({ from, offer }) => {
-      if (pc.signalingState !== "stable") return;
-      try {
-        await pc.setRemoteDescription(new RTCSessionDescription(offer));
-        for (const c of iceBuffer) {
-          try {
-            await pc.addIceCandidate(new RTCIceCandidate(c));
-          } catch {}
-        }
-        iceBuffer.length = 0;
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        socket.emit("liveAnswer", { to: from, answer });
-      } catch (e) {
-        console.error("Failed to handle live offer:", e);
-      }
-    };
-
-    const handleIce = async ({ candidate }) => {
-      if (!candidate) return;
-      try {
-        if (pc.remoteDescription) await pc.addIceCandidate(new RTCIceCandidate(candidate));
-        else iceBuffer.push(candidate);
-      } catch (e) {
-        console.error("ICE error:", e);
-      }
-    };
-
-    pc.onicecandidate = ({ candidate }) => {
-      if (candidate) socket.emit("iceCandidate", { to: slide.authorId, candidate });
-    };
-
-    const handleDenied = ({ roomId, reason }) => {
-      if (roomId !== slide.liveRoomId) return;
-      setLiveStatus(reason === "not_following" ? "denied" : "ended");
-    };
-
-    const handleEnded = ({ roomId }) => {
-      if (roomId !== slide.liveRoomId) return;
-      setLiveStatus("ended");
-      setTimeout(() => onClose(), 2500);
-    };
-
-    socket.on("liveOffer", handleOffer);
-    socket.on("iceCandidate", handleIce);
-    socket.on("liveAccessDenied", handleDenied);
-    socket.on("liveEnded", handleEnded);
-
-    socket.emit("joinLive", { roomId: slide.liveRoomId, viewerId: currentUserId });
-
-    return () => {
-      socket.off("liveOffer", handleOffer);
-      socket.off("iceCandidate", handleIce);
-      socket.off("liveAccessDenied", handleDenied);
-      socket.off("liveEnded", handleEnded);
-      socket.emit("leaveLive", { roomId: slide.liveRoomId, viewerId: currentUserId });
-      pc.close();
-      livePcRef.current = null;
-    };
-  }, [isLiveSlide, slide?.liveRoomId, slide?.authorId, currentUserId]);
-
-  const handlePrev = () => {
-    if (slideIndex > 0) setSlideIndex((i) => i - 1);
-  };
-  const handleNext = () => {
-    if (slideIndex < slides.length - 1) setSlideIndex((i) => i + 1);
-    else onClose();
-  };
-
-  const handleLike = async () => {
-    if (!slide?.id) return;
-    try {
-      const res = await apiFetch(`${API}/stories/like-story/${slide.id}`, { method: "PUT" });
-      const data = await res.json();
-      if (data.success) {
-        const nextLiked = !liked;
-        setLiked(nextLiked);
-        setLikesCount(data.likesCount);
-        setLikeState(slide.id, { likesCount: data.likesCount, liked: nextLiked });
-      } else if (res.status === 403) {
-        setAccessDenied("not_following");
-      }
-    } catch {}
-  };
-
-  const handleSendComment = () => {
-    if (!comment.trim() || !slide?.id || accessDenied) return;
-    socket.emit("storyComment", {
-      storyId: slide.id,
-      userId: currentUserId,
-      username: currentUser.username,
-      text: comment,
-    });
-    setComment("");
-  };
-
-  const sendReaction = (emoji) => {
-    if (accessDenied || !slide?.id) return;
-    socket.emit("storyComment", {
-      storyId: slide.id,
-      userId: currentUserId,
-      username: currentUser.username,
-      text: emoji,
-    });
-  };
-
-  const handleHideFromNonFollowers = async () => {
-    if (!slide?.id) return;
-    try {
-      const res = await apiFetch(`${API}/stories/hide-from-non-followers/${slide.id}`, {
-        method: "PATCH"
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setIsHidden(data.isHiddenFromNonFollowers);
-        setShowMenu(false);
-      } else Alert.alert("Error", data.message);
-    } catch {}
-  };
-
-  const handleDelete = async () => {
-    if (!slide?.id) return;
-    const ok = await confirmAsync("Delete this story?");
-    if (!ok) return;
-    try {
-      const res = await apiFetch(`${API}/stories/delete-story/${slide.id}`, {
-        method: "DELETE"
-      });
-      if (res.ok) onClose();
-    } catch {}
-  };
-
-  const goToViewerProfile = (id) => {
-    onClose();
-    if (!id) return;
-    // FIX: don't send the current user to the generic viewer screen
-    // for their own id — send them to the real Profile tab instead.
-    if (id?.toString() === currentUserId) {
-      navigation.navigate("MainTabs", { screen: "Profile" });
-    } else {
-      navigation.navigate("UserProfile", { userId: id });
-    }
-  };
-
-  if (!story) return null;
-
-  if (accessDenied) {
-    return (
-      <Modal visible transparent animationType="fade" onRequestClose={onClose}>
-        <TouchableOpacity style={styles.feedPreviewOverlay} activeOpacity={1} onPress={onClose}>
-          <TouchableOpacity activeOpacity={1} style={[styles.feedPreviewCard, styles.centered]}>
-            <Avatar src={story.userProfile} username={story.username} size={56} />
-            <Text style={{ color: "#fff", fontSize: 16, fontWeight: "700", marginTop: 8 }}>
-              Follow to view this story
-            </Text>
-            <Text style={{ color: "rgba(255,255,255,0.6)", fontSize: 13, textAlign: "center", marginTop: 4 }}>
-              Only {story.username}'s followers can see this story.
-            </Text>
-            <TouchableOpacity onPress={onClose} style={styles.deniedCloseBtn}>
-              <Text style={{ color: "#fff", fontWeight: "600" }}>Close</Text>
-            </TouchableOpacity>
-          </TouchableOpacity>
-        </TouchableOpacity>
-      </Modal>
-    );
-  }
-
-  return (
-    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
-      <View style={styles.feedPreviewOverlay}>
-        <View style={styles.feedPreviewCard}>
-          {slides.length > 1 && (
-            <View style={styles.feedPreviewProgressWrap}>
-              {slides.map((_, i) => (
-                <View key={i} style={styles.feedPreviewProgressBg}>
-                  <View style={[styles.feedPreviewProgressFill, { width: i <= slideIndex ? "100%" : "0%" }]} />
-                </View>
-              ))}
-            </View>
-          )}
-
-          <View style={styles.feedPreviewHeader}>
-            <Avatar src={story.userProfile} username={story.username} size={28} />
-            <Text style={styles.feedPreviewUsername}>{story.username}</Text>
-            {isLiveSlide && liveStatus === "live" && (
-              <View style={styles.feedPreviewLiveBadge}>
-                <View style={styles.feedPreviewLiveDot} />
-                <Text style={{ color: "#fff", fontSize: 11, fontWeight: "700" }}>LIVE</Text>
-              </View>
-            )}
-            <TouchableOpacity onPress={onClose} style={styles.feedPreviewCloseBtn}>
-              <FeatherIcon name="x" size={18} color="#fff" />
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.feedPreviewMedia}>
-            {isLiveSlide ? (
-              liveStatus === "live" && liveStream ? (
-                <RTCView streamURL={liveStream.toURL()} style={styles.feedPreviewMediaEl} objectFit="contain" />
-              ) : (
-                <View style={styles.feedPreviewLiveStatusWrap}>
-                  {liveStatus === "denied" && (
-                    <>
-                      <Text style={{ fontSize: 32 }}>🔒</Text>
-                      <Text style={styles.feedPreviewLiveStatusText}>Follow to watch</Text>
-                    </>
-                  )}
-                  {liveStatus === "ended" && (
-                    <>
-                      <Text style={{ fontSize: 32 }}>📺</Text>
-                      <Text style={styles.feedPreviewLiveStatusText}>Live has ended</Text>
-                    </>
-                  )}
-                  {(liveStatus === "connecting" || !liveStatus) && (
-                    <>
-                      <ActivityIndicator size="large" color="#fff" />
-                      <Text style={styles.feedPreviewLiveStatusText}>Connecting to live…</Text>
-                    </>
-                  )}
-                </View>
-              )
-            ) : slide.image ? (
-              isVideo ? (
-                <Video
-                  key={slide.image}
-                  source={{ uri: slide.image }}
-                  style={styles.feedPreviewMediaEl}
-                  resizeMode="contain"
-                  repeat
-                  muted
-                  paused={false}
-                />
-              ) : (
-                <Image source={{ uri: slide.image }} style={styles.feedPreviewMediaEl} resizeMode="contain" />
-              )
-            ) : (
-              <Text style={{ color: "rgba(255,255,255,0.5)", fontSize: 13 }}>No story to show</Text>
-            )}
-
-            <StoryOverlayLayer slide={slide} isLiveSlide={isLiveSlide} navigation={navigation} onNavigateAway={onClose} />
-            <RepostAttributionBadge slide={slide} isLiveSlide={isLiveSlide} navigation={navigation} onNavigateAway={onClose} />
-
-            {slides.length > 1 && !isLiveSlide && (
-              <>
-                <TouchableOpacity style={styles.feedPreviewNavLeft} onPress={handlePrev} activeOpacity={1} />
-                <TouchableOpacity style={styles.feedPreviewNavRight} onPress={handleNext} activeOpacity={1} />
-              </>
-            )}
-
-            <View style={styles.feedPreviewFloatZone} pointerEvents="none">
-              {floatingEmojis.map((e) => (
-                <FloatingEmoji key={e.id} emoji={e.emoji} />
-              ))}
-            </View>
-
-            {liveComments.length > 0 && (
-              <View style={styles.feedPreviewCommentsFeed} pointerEvents="none">
-                {liveComments.map((c, i) => (
-                  <View key={i} style={styles.feedPreviewCommentBubble}>
-                    <Text style={styles.feedPreviewCommentUser}>{c.username}</Text>
-                    <Text style={styles.feedPreviewCommentText}>{c.text}</Text>
-                  </View>
-                ))}
-              </View>
-            )}
-          </View>
-
-          {isOwn ? (
-            <View style={styles.feedPreviewOwnBar}>
-              <TouchableOpacity onPress={() => setShowShareSheet(true)} style={styles.feedPreviewSendBtn}>
-                <Icon name="paper-plane" size={14} color="#fff" />
-                <Text style={{ color: "#fff", fontSize: 12, fontWeight: "700" }}>Send</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => setShowViewers(true)} style={styles.feedPreviewStatPill}>
-                <Icon name="eye" size={13} color="#fff" />
-                <Text style={{ color: "#fff", fontSize: 13, fontWeight: "600" }}>{formatCount(viewers.length)}</Text>
-              </TouchableOpacity>
-              <View style={styles.feedPreviewStatPill}>
-                <Icon name="thumbs-up" solid size={13} color="#fff" />
-                <Text style={{ color: "#fff", fontSize: 13, fontWeight: "600" }}>{formatCount(likesCount)}</Text>
-              </View>
-              <View style={{ position: "relative", marginLeft: "auto" }}>
-                <TouchableOpacity onPress={() => setShowMenu((v) => !v)} style={styles.feedPreviewIconBtn}>
-                  <Icon name="ellipsis-v" size={16} color="#fff" />
-                </TouchableOpacity>
-                {showMenu && (
-                  <View style={[styles.dropdown, { top: "auto", bottom: 34, right: 0 }]}>
-                    <TouchableOpacity onPress={handleHideFromNonFollowers} style={styles.dropdownItem}>
-                      <Text style={{ fontSize: 14, fontWeight: "500", color: "#222" }}>
-                        {isHidden ? "Show to everyone" : "Hide from non-followers"}
-                      </Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity onPress={handleDelete} style={[styles.dropdownItem, { borderBottomWidth: 0 }]}>
-                      <Text style={{ fontSize: 14, fontWeight: "500", color: "#e53935" }}>Delete Story</Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
-              </View>
-            </View>
-          ) : (
-            <View style={{ gap: 8 }}>
-              {isLiveSlide && liveStatus === "live" && (
-                <View style={{ flexDirection: "row", gap: 8, justifyContent: "center" }}>
-                  {FEED_PREVIEW_REACTIONS.map((emoji) => (
-                    <TouchableOpacity key={emoji} onPress={() => sendReaction(emoji)} style={styles.reactionBtn}>
-                      <Text style={{ fontSize: 20 }}>{emoji}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              )}
-              <View style={styles.feedPreviewViewerBar}>
-                <TextInput
-                  value={comment}
-                  onChangeText={setComment}
-                  onSubmitEditing={handleSendComment}
-                  placeholder="Send message..."
-                  placeholderTextColor="rgba(255,255,255,0.6)"
-                  style={styles.feedPreviewInput}
-                />
-                <TouchableOpacity onPress={handleLike} style={styles.feedPreviewIconBtn}>
-                  <Icon name="thumbs-up" solid size={17} color={liked ? "rgb(234,182,118)" : "#fff"} />
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={handleSendComment}
-                  disabled={!comment.trim()}
-                  style={[styles.feedPreviewIconBtn, { opacity: comment.trim() ? 1 : 0.4 }]}
-                >
-                  <Icon name="paper-plane" size={16} color="#fff" />
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => setShowShareSheet(true)} style={styles.feedPreviewIconBtn}>
-                  <Icon name="paper-plane" size={18} color="#fff" style={{ transform: [{ rotate: "20deg" }] }} />
-                </TouchableOpacity>
-              </View>
-            </View>
-          )}
-        </View>
-      </View>
-
-      {showShareSheet && <FeedStoryShareSheet storyId={slide.id} onClose={() => setShowShareSheet(false)} />}
-      {showViewers && (
-        <FeedStoryViewersSheet viewers={viewers} onClose={() => setShowViewers(false)} onNavigate={goToViewerProfile} />
-      )}
-    </Modal>
-  );
-}
-
-function FloatingEmoji({ emoji }) {
-  const translateY = useRef(new Animated.Value(0)).current;
-  const opacity = useRef(new Animated.Value(1)).current;
-  useEffect(() => {
-    Animated.parallel([
-      Animated.timing(translateY, { toValue: -120, duration: 2000, useNativeDriver: true }),
-      Animated.timing(opacity, { toValue: 0, duration: 2000, useNativeDriver: true }),
-    ]).start();
-  }, []);
-  return (
-    <Animated.Text style={{ fontSize: 22, transform: [{ translateY }], opacity }}>{emoji}</Animated.Text>
-  );
-}
-
 function BottomSheet({ title, onClose, children, inputBar, scrollable = true }) {
   const [ready, setReady] = useState(false);
   useEffect(() => {
@@ -1040,145 +407,6 @@ function BottomSheet({ title, onClose, children, inputBar, scrollable = true }) 
         </Animated.View>
       </KeyboardAvoidingView>
     </Modal>
-  );
-}
-
-/* ─────────────────────────── FeedStoryShareSheet ─────────────────────────── */
-function FeedStoryShareSheet({ storyId, onClose }) {
-  const [search, setSearch] = useState("");
-  const [users, setUsers] = useState([]);
-  const [selected, setSelected] = useState(new Set());
-  const [loading, setLoading] = useState(true);
-  const [sending, setSending] = useState(false);
-  const [sent, setSent] = useState(false);
-  const timer = useRef(null);
-
-  useEffect(() => {
-    apiFetch(`${API}/auth/share/users`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.success) setUsers(data.users);
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => {
-    clearTimeout(timer.current);
-    timer.current = setTimeout(() => {
-      apiFetch(`${API}/auth/share/users?q=${encodeURIComponent(search)}`)
-        .then((r) => r.json())
-        .then((data) => {
-          if (data.success) setUsers(data.users);
-        })
-        .catch(() => {});
-    }, 300);
-    return () => clearTimeout(timer.current);
-  }, [search]);
-
-  const toggle = (id) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
-  };
-
-  const handleSend = async () => {
-    if (selected.size === 0 || !storyId) return;
-    setSending(true);
-    try {
-      const res = await apiFetch(`${API}/auth/share/story`, {
-        method: "POST",
-        body: JSON.stringify({ storyId, toUserIds: Array.from(selected) })
-      });
-      const data = await res.json();
-      if (data.success) {
-        setSent(true);
-        setTimeout(onClose, 900);
-      }
-    } catch {}
-    finally {
-      setSending(false);
-    }
-  };
-
-  return (
-    <BottomSheet title={sent ? "Sent!" : "Send to"} onClose={onClose}>
-      {!sent && (
-        <>
-          <View style={{ paddingHorizontal: 16, paddingBottom: 10 }}>
-            <View style={styles.searchWrap}>
-              <FeatherIcon name="search" size={14} color="#999" />
-              <TextInput
-                value={search}
-                onChangeText={setSearch}
-                placeholder="Search people…"
-                style={styles.searchInput}
-                autoFocus
-              />
-              {!!search && (
-                <TouchableOpacity onPress={() => setSearch("")}>
-                  <FeatherIcon name="x" size={14} color="#999" />
-                </TouchableOpacity>
-              )}
-            </View>
-          </View>
-          <View style={{ paddingHorizontal: 16, paddingBottom: 8 }}>
-            {loading ? (
-              <Text style={styles.emptyText}>Loading…</Text>
-            ) : users.length === 0 ? (
-              <Text style={styles.emptyText}>No users found</Text>
-            ) : (
-              users.map((u) => (
-                <TouchableOpacity key={u._id} onPress={() => toggle(u._id)} style={styles.userRow}>
-                  <Avatar src={u.profilePic} username={u.username} size={42} />
-                  <Text style={{ flex: 1, fontSize: 14, fontWeight: "600" }}>{u.username}</Text>
-                  <View
-                    style={[
-                      styles.checkCircle,
-                      selected.has(u._id) && { backgroundColor: "rgb(234,182,118)", borderWidth: 0 },
-                    ]}
-                  >
-                    {selected.has(u._id) && <Text style={{ color: "#fff", fontSize: 12 }}>✓</Text>}
-                  </View>
-                </TouchableOpacity>
-              ))
-            )}
-          </View>
-          <View style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
-            <TouchableOpacity
-              onPress={handleSend}
-              disabled={selected.size === 0 || sending}
-              style={[styles.sendAllBtn, { opacity: selected.size > 0 && !sending ? 1 : 0.5 }]}
-            >
-              <Text style={{ color: "#fff", fontWeight: "700", fontSize: 14 }}>
-                {sending ? "Sending…" : `Send${selected.size > 0 ? ` (${selected.size})` : ""}`}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </>
-      )}
-    </BottomSheet>
-  );
-}
-
-function FeedStoryViewersSheet({ viewers, onClose, onNavigate }) {
-  return (
-    <BottomSheet title={`${formatCount(viewers.length)} viewers`} onClose={onClose}>
-      <View style={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: 20 }}>
-        {viewers.length === 0 ? (
-          <Text style={styles.emptyText}>No viewers yet</Text>
-        ) : (
-          viewers.map((v, i) => (
-            <TouchableOpacity key={v._id ?? i} onPress={() => onNavigate(v._id)} style={styles.userRow}>
-              <Avatar src={v.profilePic} username={v.username} size={40} />
-              <Text style={{ fontSize: 15, fontWeight: "600" }}>{v.username}</Text>
-            </TouchableOpacity>
-          ))
-        )}
-      </View>
-    </BottomSheet>
   );
 }
 
@@ -1610,12 +838,30 @@ const isDownloadingRef = useRef(false);
   const [showLikers, setShowLikers] = useState(false);
   const [showComments, setShowComments] = useState(false);
   const [showShare, setShowShare] = useState(false);
-  const [isHidden, setIsHidden] = useState(p?.isHiddenFromNonFollowers || false);
   const [comments, setComments] = useState(p?.comments ?? []);
-  const [isNotInterested, setIsNotInterested] = useState(p?.isNotInterested || false);
-  const [isBlocked, setIsBlocked] = useState(false);
   const [downloadCount, setDownloadCount] = useState(p?.downloadsCount || p?.downloads?.length || 0);
-  const [removedFromView, setRemovedFromView] = useState(false);
+  // ── all ⋮-menu actions live in usePostOptions.js ──
+  const {
+    options: menuOptions,
+    isHidden,
+    isNotInterested,
+    isBlocked,
+    removedFromView,
+    setRemovedFromView,
+  } = usePostOptions({
+    post: p,
+    isOwner,
+    authorId,
+    username,
+    noun: "post",
+    menu: menu,
+    currentUserId: currentUserId,
+    onBlock,
+    onDeleted,
+    onNotInterested,
+    onHide,
+  });
+
   const [showHeartBurst, setShowHeartBurst] = useState(false);
   const [sharesCount, setSharesCount] = useState(shareCount(p?.shares) ?? p?.sharesCount ?? 0);
   const [collaborators, setCollaborators] = useState(p?.collaborators ?? []);
@@ -1790,67 +1036,9 @@ const isDownloadingRef = useRef(false);
   };
   const handleMediaTap = useDoubleTap(triggerDoubleTapLike);
 
-  const handleNotInterested = async () => {
-    try {
-      const res = await apiFetch(`${API}/auth/not-interested/${p._id}`, { method: "PATCH" });
-      const data = await res.json();
-      if (data.success) {
-        setIsNotInterested((prev) => !prev);
-        if (!isNotInterested) onNotInterested(p._id);
-        else Alert.alert("", data.message);
-      }
-    } catch (err) {
-      console.log(err);
-    }
-  };
 
-  const handleDelete = async () => {
-    const ok = await confirmAsync("Delete this post?");
-    if (!ok) return;
-    try {
-      const res = await apiFetch(`${API}/auth/delete-post/${p._id}`, { method: "DELETE" });
-      const data = await res.json();
-      if (res.ok) {
-        setRemovedFromView(true);
-        onDeleted?.(p._id);
-      } else {
-        Alert.alert("Error", data.message);
-      }
-    } catch (err) {
-      console.log(err);
-    }
-  };
 
-  const handleBlock = async () => {
-    const ok = await confirmAsync(`Block ${username}?`);
-    if (!ok) return;
-    try {
-      const res = await apiFetch(`${API}/auth/block/${authorId}`, { method: "POST" });
-      const data = await res.json();
-      if (data.success) {
-        setIsBlocked(true);
-        onBlock(authorId);
-      } else Alert.alert("Error", data.message || "Block failed");
-    } catch (err) {
-      console.log(err);
-    }
-  };
 
-  const handleHideFromNonFollowers = async () => {
-    try {
-      const res = await apiFetch(`${API}/auth/hide-from-non-followers/${p._id}`, {
-        method: "PATCH"
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setIsHidden(data.isHidden);
-        if (data.isHidden) onHide(p._id);
-        else Alert.alert("", data.message);
-      }
-    } catch (err) {
-      console.log(err);
-    }
-  };
 
   const goToProfile = (id) => {
     if (!id) return;
@@ -1863,25 +1051,6 @@ const isDownloadingRef = useRef(false);
     }
   };
 
-  const menuOptions = isOwner
-    ? [
-        { label: "Delete", color: "#e53935", action: () => { menu.close(); handleDelete(); } },
-        {
-          label: isHidden ? "Show to everyone" : "Hide from non-followers",
-          color: "#222",
-          action: () => { menu.close(); handleHideFromNonFollowers(); },
-        },
-      ]
-    : isBlocked
-    ? [{ label: "Blocked", color: "#888", action: () => {} }]
-    : [
-        {
-          label: isNotInterested ? "Interested" : "Not Interested",
-          color: "#222",
-          action: () => { menu.close(); handleNotInterested(); },
-        },
-        { label: `Block ${username}`, color: "#e53935", action: () => { menu.close(); handleBlock(); } },
-      ];
 
   const handleAvatarClick = () => {
     if (authorHasStory) onOpenStory?.(authorId);
@@ -2070,12 +1239,30 @@ const isDownloadingRef = useRef(false);
   const [showLikers, setShowLikers] = useState(false);
   const [showComments, setShowComments] = useState(false);
   const [showShare, setShowShare] = useState(false);
-  const [isHidden, setIsHidden] = useState(p?.isHiddenFromNonFollowers || false);
   const [comments, setComments] = useState(p?.comments ?? []);
-  const [isNotInterested, setIsNotInterested] = useState(p?.isNotInterested || false);
-  const [isBlocked, setIsBlocked] = useState(false);
   const [downloadCount, setDownloadCount] = useState(p?.downloadsCount || p?.downloads?.length || 0);
-  const [removedFromView, setRemovedFromView] = useState(false);
+  // ── all ⋮-menu actions live in usePostOptions.js ──
+  const {
+    options: menuOptions,
+    isHidden,
+    isNotInterested,
+    isBlocked,
+    removedFromView,
+    setRemovedFromView,
+  } = usePostOptions({
+    post: p,
+    isOwner,
+    authorId,
+    username,
+    noun: "video",
+    menu: menu,
+    currentUserId: currentUserId,
+    onBlock,
+    onDeleted,
+    onNotInterested,
+    onHide,
+  });
+
   const [showHeartBurst, setShowHeartBurst] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [sharesCount, setSharesCount] = useState(shareCount(p?.shares) ?? p?.sharesCount ?? 0);
@@ -2089,8 +1276,8 @@ const isDownloadingRef = useRef(false);
   }, [showLikers, showComments, showShare]);
 
   useEffect(() => {
-    if (!isVisible) setIsMuted(true);
-  }, [isVisible]);
+    if (isVisible && p?._id) recordPostView(p._id);
+  }, [isVisible, p?._id]);
 
   useEffect(() => {
     if (!p?._id) return;
@@ -2254,65 +1441,9 @@ const isDownloadingRef = useRef(false);
   };
   const handleMediaTap = useDoubleTap(triggerDoubleTapLike);
 
-  const handleNotInterested = async () => {
-    try {
-      const res = await apiFetch(`${API}/auth/not-interested/${p._id}`, { method: "PATCH" });
-      const data = await res.json();
-      if (data.success) {
-        setIsNotInterested((prev) => !prev);
-        if (!isNotInterested) onNotInterested(p._id);
-        else Alert.alert("", data.message);
-      }
-    } catch (err) {
-      console.log(err);
-    }
-  };
 
-  const handleDelete = async () => {
-    const ok = await confirmAsync("Delete this post?");
-    if (!ok) return;
-    try {
-      const res = await apiFetch(`${API}/auth/delete-post/${p._id}`, { method: "DELETE" });
-      const data = await res.json();
-      if (res.ok) {
-        setRemovedFromView(true);
-        onDeleted?.(p._id);
-      } else Alert.alert("Error", data.message);
-    } catch (err) {
-      console.log(err);
-    }
-  };
 
-  const handleBlock = async () => {
-    const ok = await confirmAsync(`Block ${username}?`);
-    if (!ok) return;
-    try {
-      const res = await apiFetch(`${API}/auth/block/${authorId}`, { method: "POST" });
-      const data = await res.json();
-      if (data.success) {
-        setIsBlocked(true);
-        onBlock(authorId);
-      } else Alert.alert("Error", data.message || "Block failed");
-    } catch (err) {
-      console.log(err);
-    }
-  };
 
-  const handleHideFromNonFollowers = async () => {
-    try {
-      const res = await apiFetch(`${API}/auth/hide-from-non-followers/${p._id}`, {
-        method: "PATCH"
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setIsHidden(data.isHidden);
-        if (data.isHidden) onHide(p._id);
-        else Alert.alert("", data.message);
-      }
-    } catch (err) {
-      console.log(err);
-    }
-  };
 
   const goToProfile = (id) => {
     if (!id) return;
@@ -2330,25 +1461,6 @@ const isDownloadingRef = useRef(false);
     else goToProfile(authorId);
   };
 
-  const menuOptions = isOwner
-    ? [
-        { label: "Delete", color: "#e53935", action: () => { menu.close(); handleDelete(); } },
-        {
-          label: isHidden ? "Show to everyone" : "Hide from non-followers",
-          color: "#222",
-          action: () => { menu.close(); handleHideFromNonFollowers(); },
-        },
-      ]
-    : isBlocked
-    ? [{ label: "Blocked", color: "#888", action: () => {} }]
-    : [
-        {
-          label: isNotInterested ? "Interested" : "Not Interested",
-          color: "#222",
-          action: () => { menu.close(); handleNotInterested(); },
-        },
-        { label: `Block ${username}`, color: "#e53935", action: () => { menu.close(); handleBlock(); } },
-      ];
 
   if (removedFromView) return null;
 
@@ -2530,10 +1642,28 @@ function TextFeedCard({
   const [showComments, setShowComments] = useState(false);
   const [showShare, setShowShare] = useState(false);
   const [comments, setComments] = useState(p?.comments ?? []);
-  const [isHidden, setIsHidden] = useState(p?.isHiddenFromNonFollowers || false);
-  const [isNotInterested, setIsNotInterested] = useState(p?.isNotInterested || false);
-  const [isBlocked, setIsBlocked] = useState(false);
-  const [removedFromView, setRemovedFromView] = useState(false);
+  // ── all ⋮-menu actions live in usePostOptions.js ──
+  const {
+    options: menuOptions,
+    isHidden,
+    isNotInterested,
+    isBlocked,
+    removedFromView,
+    setRemovedFromView,
+  } = usePostOptions({
+    post: p,
+    isOwner,
+    authorId,
+    username,
+    noun: "post",
+    menu: menu,
+    currentUserId: currentUserId,
+    onBlock,
+    onDeleted,
+    onNotInterested,
+    onHide,
+  });
+
   const [showHeartBurst, setShowHeartBurst] = useState(false);
   const [sharesCount, setSharesCount] = useState(shareCount(p?.shares) ?? p?.sharesCount ?? 0);
   const [collaborators, setCollaborators] = useState(p?.collaborators ?? []);
@@ -2658,65 +1788,9 @@ function TextFeedCard({
   };
   const handleMediaTap = useDoubleTap(triggerDoubleTapLike);
 
-  const handleNotInterested = async () => {
-    try {
-      const res = await apiFetch(`${API}/auth/not-interested/${p._id}`, { method: "PATCH" });
-      const data = await res.json();
-      if (data.success) {
-        setIsNotInterested((prev) => !prev);
-        if (!isNotInterested) onNotInterested(p._id);
-        else Alert.alert("", data.message);
-      }
-    } catch (err) {
-      console.log(err);
-    }
-  };
 
-  const handleDelete = async () => {
-    const ok = await confirmAsync("Delete this post?");
-    if (!ok) return;
-    try {
-      const res = await apiFetch(`${API}/auth/delete-post/${p._id}`, { method: "DELETE" });
-      const data = await res.json();
-      if (res.ok) {
-        setRemovedFromView(true);
-        onDeleted?.(p._id);
-      } else Alert.alert("Error", data.message);
-    } catch (err) {
-      console.log(err);
-    }
-  };
 
-  const handleBlock = async () => {
-    const ok = await confirmAsync(`Block ${username}?`);
-    if (!ok) return;
-    try {
-      const res = await apiFetch(`${API}/auth/block/${authorId}`, { method: "POST" });
-      const data = await res.json();
-      if (data.success) {
-        setIsBlocked(true);
-        onBlock(authorId);
-      }
-    } catch (err) {
-      console.log(err);
-    }
-  };
 
-  const handleHideFromNonFollowers = async () => {
-    try {
-      const res = await apiFetch(`${API}/auth/hide-from-non-followers/${p._id}`, {
-        method: "PATCH"
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setIsHidden(data.isHidden);
-        if (data.isHidden) onHide(p._id);
-        else Alert.alert("", data.message);
-      }
-    } catch (err) {
-      console.log(err);
-    }
-  };
 
   const goToProfile = (id) => {
     if (!id) return;
@@ -2734,25 +1808,6 @@ function TextFeedCard({
     else goToProfile(authorId);
   };
 
-  const menuOptions = isOwner
-    ? [
-        { label: "Delete", color: "#e53935", action: () => { menu.close(); handleDelete(); } },
-        {
-          label: isHidden ? "Show to everyone" : "Hide from non-followers",
-          color: "#222",
-          action: () => { menu.close(); handleHideFromNonFollowers(); },
-        },
-      ]
-    : isBlocked
-    ? [{ label: "Blocked", color: "#888", action: () => {} }]
-    : [
-        {
-          label: isNotInterested ? "Interested" : "Not Interested",
-          color: "#222",
-          action: () => { menu.close(); handleNotInterested(); },
-        },
-        { label: `Block ${username}`, color: "#e53935", action: () => { menu.close(); handleBlock(); } },
-      ];
 
   if (removedFromView) return null;
 
@@ -2898,6 +1953,12 @@ function TextFeedCard({
 }
 
 /* ─────────────────────────── Homepage (main screen) ─────────────────────────── */
+// Memoized card wrappers — a card only re-renders when ITS props change,
+// not every time the whole feed list re-renders.
+const MemoImageFeedCard = React.memo(ImageFeedCard);
+const MemoVideoFeedCard = React.memo(VideoFeedCard);
+const MemoTextFeedCard = React.memo(TextFeedCard);
+
 function Homepage() {
   const navigation = useNavigation();
 
@@ -2923,9 +1984,8 @@ function Homepage() {
   const [seenStoryIds, setSeenStoryIds] = useState(() => new Set());
   const [posts, setPosts] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [blockedIds, setBlockedIds] = useState([]);
-  const [notInterestedIds, setNotInterestedIds] = useState([]);
-  const [hiddenPostIds, setHiddenPostIds] = useState([]);
+  // Block state is shared app-wide (BlockStore) so it stays in sync with every other page.
+  const blockedIds = useBlockedIds();
   const [deletedPostIds, setDeletedPostIds] = useState([]);
   const [viewedPostIds, setViewedPostIds] = useState(() => new Set());
   const [visibleVideoIds, setVisibleVideoIds] = useState(() => new Set());
@@ -2935,13 +1995,16 @@ const [mutedMap, setMutedMap] = useState(() => getMutedMap());
   // open, or the story preview's share/viewers sheets are open — drives
   // the Navbar zIndex swap at the bottom of this component.
   const [sheetOpen, setSheetOpen] = useState(false);
-
+// Bumps whenever ANY page changes a post option (hide / not-interested) so the
+  // memoized visiblePosts below re-evaluates against the shared option cache.
+  const [optionsVersion, setOptionsVersion] = useState(0);
+  useEffect(() => subscribeOptionChanges(() => setOptionsVersion((v) => v + 1)), []);
   // NEW — screen-wide swipe to switch tabs (bubble-phase, so it never
   // steals the gesture from the post-image/text carousels: those own
   // horizontal ScrollViews get first refusal on a touch that starts
   // directly on them, and only when nothing more specific claims the
   // gesture does this fire).
-  const { panHandlers: swipePanHandlers } = useSwipeToChangeTab({ capture: false });
+ const { panHandlers: swipePanHandlers, screenStyle } =useSwipeToChangeTab({ capture: false, animateScreen: true });
   const feedListRef = useRef(null);
 
   const {
@@ -3036,7 +2099,9 @@ const [mutedMap, setMutedMap] = useState(() => getMutedMap());
       setLoading(false);
     }
   }, []);
-
+const { refreshing, onRefresh } = useRefresh(async () => {
+  await Promise.all([fetchStories(), fetchPosts()]);
+});
   // Mount: load auth cache, register socket, fetch stories + posts
 useEffect(() => {
   (async () => {
@@ -3046,30 +2111,40 @@ useEffect(() => {
     await fetchStories();
     fetchPosts();
     loadMutedMap();
+    loadBlockedStore();
   })();
   return subscribeMuted(setMutedMap);
 }, [fetchStories, fetchPosts]);
 
-  // NEW — tapping the already-active "Home" tab reloads this screen
-  // (refetch stories + posts, and scroll the feed back to the top)
-  // instead of doing nothing, since navigate() to the current route is
-  // a no-op in React Navigation.
-  useEffect(() => {
-    return subscribeTabReload("Home", () => {
-      feedListRef.current?.scrollToOffset?.({ offset: 0, animated: true });
-      fetchStories();
-      fetchPosts();
-    });
-  }, [fetchStories, fetchPosts]);
+useEffect(() => {
+  return subscribeTabReload("Home", () => {
+    feedListRef.current?.scrollToOffset?.({ offset: 0, animated: true });
+    onRefresh();
+  });
+}, [onRefresh]);
 
-  const handleBlock = (id) => setBlockedIds((prev) => [...prev, id.toString()]);
-  const handleNotInterested = (id) => setNotInterestedIds((prev) => [...prev, id]);
-  const handleHide = (id) => setHiddenPostIds((prev) => [...prev, id]);
-  const handleDeleted = (id) => setDeletedPostIds((prev) => [...prev, id]);
-  const handleFollowChange = (authorId, followed) => {
+  // Block / hide / not-interested are all driven by the shared stores now
+  // (BlockStore + usePostOptions cache), so these callbacks are intentionally no-ops.
+  const handleBlock = useCallback(() => {}, []);
+  const handleNotInterested = useCallback(() => {}, []);
+  const handleHide = useCallback(() => {}, []);
+  const handleDeleted = useCallback((id) => setDeletedPostIds((prev) => [...prev, id]), []);
+  const handleFollowChange = useCallback((authorId, followed) => {
     if (followed) addFollowing(authorId);
     else removeFollowing(authorId);
-  };
+  }, []);
+
+  // When someone is unblocked anywhere in the app, refetch so their posts/stories return.
+  useEffect(
+    () =>
+      subscribeBlocked((id, isBlocked) => {
+        if (id && !isBlocked) {
+          fetchPosts();
+          fetchStories();
+        }
+      }),
+    [fetchPosts, fetchStories]
+  );
 
   const handlePostLiked = useCallback((postId) => {
     markPostInteracted(postId);
@@ -3196,19 +2271,30 @@ useEffect(() => {
   socket.on("userUnfollowed", handler);
   return () => socket.off("userUnfollowed", handler);
 }, [currentUser?._id, currentUser?.id]);
-const visiblePosts = posts.filter((p) => {
-  const authorId = (p?.author?._id || p?.author)?.toString();
-  const myId = (currentUser?._id || currentUser?.id)?.toString();
+const myId = useMemo(
+  () => (currentUser?._id || currentUser?.id)?.toString(),
+  [currentUser?._id, currentUser?.id]
+);
 
-  if (blockedIds.includes(authorId)) return false;
-  if (authorId !== myId && mutedMap[authorId]?.mutePost) return false;
-  if (notInterestedIds.includes(p._id)) return false;
-  if (hiddenPostIds.includes(p._id)) return false;
-  if (deletedPostIds.includes(p._id)) return false;
-  if (authorId === myId) return true;
-  if (p?.author?.isPrivate && !myFollowingIds.includes(authorId)) return false;
-  return true;
-});
+const visiblePosts = useMemo(
+  () =>
+    posts.filter((p) => {
+      const authorId = (p?.author?._id || p?.author)?.toString();
+
+      if (blockedIds.has(authorId)) return false;
+      if (authorId !== myId && mutedMap[authorId]?.mutePost) return false;
+      const opt = getOptionState(p._id);
+      if (opt.isNotInterested === true) return false;
+      if (opt.isHidden === true) return false;
+      if (deletedPostIds.includes(p._id)) return false;
+      if (authorId === myId) return true;
+      if (p?.author?.isPrivate && !myFollowingIds.includes(authorId)) return false;
+      return true;
+    }),
+  // optionsVersion forces a re-run when another page changes an option
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  [posts, blockedIds, mutedMap, optionsVersion, deletedPostIds, myFollowingIds, myId]
+);
 
   const storyAuthorIds = useMemo(() => new Set(stories.map((s) => s.id?.toString())), [stories]);
 
@@ -3217,64 +2303,63 @@ const followingStories = useMemo(
     stories.filter((s) => {
       if (!(s.isOwn || myFollowingIds.includes(s.id?.toString()))) return false;
       if (s.isOwn) return true;
+      if (blockedIds.has(s.id?.toString())) return false;
       return !mutedMap[s.id]?.muteStory;
     }),
-  [stories, myFollowingIds, mutedMap]
+  [stories, myFollowingIds, mutedMap, blockedIds]
 );
 
-  const previewStory = previewAuthorId
-    ? stories.find((s) => s.id?.toString() === previewAuthorId?.toString()) || null
-    : null;
+  const previewStory = useMemo(
+    () =>
+      previewAuthorId
+        ? stories.find((st) => st.id?.toString() === previewAuthorId?.toString()) || null
+        : null,
+    [previewAuthorId, stories]
+  );
 
-  const followingPosts = visiblePosts
-    .filter((p) => {
-      const authorId = (p?.author?._id || p?.author)?.toString();
-      const myId = (currentUser?._id || currentUser?.id)?.toString();
-      return authorId === myId || myFollowingIds.includes(authorId);
-    })
-    .filter((p) => !viewedPostIds.has(p._id))
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  const followingPosts = useMemo(
+    () =>
+      visiblePosts
+        .filter((p) => {
+          const authorId = (p?.author?._id || p?.author)?.toString();
+          return authorId === myId || myFollowingIds.includes(authorId);
+        })
+        .filter((p) => !viewedPostIds.has(p._id))
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)),
+    [visiblePosts, myId, myFollowingIds, viewedPostIds]
+  );
 
-  const discoverPosts = visiblePosts
-    .filter((p) => {
-      const authorId = (p?.author?._id || p?.author)?.toString();
-      const myId = (currentUser?._id || currentUser?.id)?.toString();
-      if (p?.author?.isPrivate && !myFollowingIds.includes(authorId)) return false;
-      return authorId !== myId && !myFollowingIds.includes(authorId);
-    })
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  const discoverPosts = useMemo(
+    () =>
+      visiblePosts
+        .filter((p) => {
+          const authorId = (p?.author?._id || p?.author)?.toString();
+          if (p?.author?.isPrivate && !myFollowingIds.includes(authorId)) return false;
+          return authorId !== myId && !myFollowingIds.includes(authorId);
+        })
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)),
+    [visiblePosts, myId, myFollowingIds]
+  );
 
   // Combined FlatList data: following posts, an "all caught up" divider, then discover posts
-
-const feedData = useMemo(() => {
-  const arr = [];
-  const addPostsWithAds = (sectionPosts, section) => {
-    sectionPosts.forEach((p, index) => {
-      arr.push({
-        key: p._id,
-        type: "post",
-        post: p,
+  const feedData = useMemo(() => {
+    const arr = [];
+    const addPostsWithAds = (sectionPosts, section) => {
+      sectionPosts.forEach((p, index) => {
+        arr.push({ key: p._id, type: "post", post: p });
+        // Native ad after every 4 posts.
+        if ((index + 1) % 4 === 0 && index < sectionPosts.length - 1) {
+          arr.push({ key: `native-ad-${section}-${index + 1}`, type: "nativeAd" });
+        }
       });
-      // Add a native ad after every 4 posts.
-      if ((index + 1) % 4 === 0 && index < sectionPosts.length - 1) {
-        arr.push({
-          key: `native-ad-${section}-${index + 1}`,
-          type: "nativeAd",
-        });
-      }
-    });
-  };
-  addPostsWithAds(followingPosts, "following");
-  if (followingPosts.length > 0 && discoverPosts.length > 0) {
-    arr.push({
-      key: "__divider__",
-      type: "divider",
-    });
-  }
-  addPostsWithAds(discoverPosts, "discover");
-  return arr;
-}, [followingPosts, discoverPosts]);
-
+    };
+    addPostsWithAds(followingPosts, "following");
+    if (followingPosts.length > 0 && discoverPosts.length > 0) {
+      arr.push({ key: "__divider__", type: "divider" });
+    }
+    addPostsWithAds(discoverPosts, "discover");
+    return arr;
+  }, [followingPosts, discoverPosts]);
 
   // Viewability tracking replaces the web IntersectionObserver-based autoplay
   const onViewableItemsChanged = useRef(({ viewableItems }) => {
@@ -3287,39 +2372,43 @@ const feedData = useMemo(() => {
   }).current;
   const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 60 }).current;
 
- const renderItem = ({ item }) => {
-  if (item.type === "divider") return <AllCaughtUpDivider />;
+  const renderItem = useCallback(
+    ({ item }) => {
+      if (item.type === "divider") return <AllCaughtUpDivider />;
+      if (item.type === "nativeAd") return <SocialioNativeAd />;
 
-  if (item.type === "nativeAd") {
-    return <SocialioNativeAd />;
-  }
+      const p = item.post;
+      const props = {
+        p,
+        navigation,
+        onBlock: handleBlock,
+        onNotInterested: handleNotInterested,
+        onHide: handleHide,
+        onDeleted: handleDeleted,
+        onFollowChange: handleFollowChange,
+        myFollowingIds,
+        storyAuthorIds,
+        seenStoryIds,
+        onInteract: handlePostLiked,
+        onOpenStory: openStoryForAuthor,
+        onSheetOpen: setSheetOpen,
+      };
 
-  const p = item.post;
-    const props = {
-      p,
-      navigation,
-      onBlock: handleBlock,
-      onNotInterested: handleNotInterested,
-      onHide: handleHide,
-      onDeleted: handleDeleted,
-      onFollowChange: handleFollowChange,
-      myFollowingIds,
-      storyAuthorIds,
-      seenStoryIds,
-      onInteract: handlePostLiked,
-      onOpenStory: openStoryForAuthor,
-      onSheetOpen: setSheetOpen,
-    };
-
-    if (p?.postType === "image" || p?.postType === "carousel") return <ImageFeedCard {...props} />;
-    if (p?.postType === "video")
-      return <VideoFeedCard {...props} isVisible={visibleVideoIds.has(p._id)} />;
-    if (p?.postType === "text") return <TextFeedCard {...props} />;
-    return null;
-  };
+      if (p?.postType === "image" || p?.postType === "carousel") return <MemoImageFeedCard {...props} />;
+      if (p?.postType === "video")
+        return <MemoVideoFeedCard {...props} isVisible={visibleVideoIds.has(p._id)} />;
+      if (p?.postType === "text") return <MemoTextFeedCard {...props} />;
+      return null;
+    },
+    [
+      navigation, handleBlock, handleNotInterested, handleHide, handleDeleted,
+      handleFollowChange, myFollowingIds, storyAuthorIds, seenStoryIds,
+      handlePostLiked, openStoryForAuthor, visibleVideoIds,
+    ]
+  );
 
   return (
-    <View style={{ flex: 1, backgroundColor: "#fff" }} {...swipePanHandlers}>
+    <Animated.View style={[{ flex: 1, backgroundColor: "#fff" }, screenStyle]} {...swipePanHandlers}>
 
       {activeIndex === null && (
         <>
@@ -3328,8 +2417,20 @@ const feedData = useMemo(() => {
             data={feedData}
             keyExtractor={(item) => item.key}
             renderItem={renderItem}
+            initialNumToRender={3}
+            maxToRenderPerBatch={3}
+            windowSize={7}
+            removeClippedSubviews
             onViewableItemsChanged={onViewableItemsChanged}
             viewabilityConfig={viewabilityConfig}
+            refreshControl={
+  <RefreshControl
+    refreshing={refreshing}
+    onRefresh={onRefresh}
+    tintColor="rgb(234,182,118)"
+    colors={["rgb(234,182,118)"]}
+  />
+}
             ListHeaderComponent={
               <>
                 <View style={styles.topBar}>
@@ -3401,7 +2502,7 @@ const feedData = useMemo(() => {
           onSheetOpen={setSheetOpen}
         />
       )}
-    </View>
+    </Animated.View>
   );
 }
 

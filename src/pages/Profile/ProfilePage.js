@@ -12,12 +12,13 @@ import {
   findNodeHandle,
   FlatList,
   UIManager,
-  PanResponder
+  Animated,
+  RefreshControl,
 } from "react-native";
 import FeatherIcon from "react-native-vector-icons/Feather";
 import FA5Icon from "react-native-vector-icons/FontAwesome5";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useNavigation, useFocusEffect} from "@react-navigation/native";
+import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import { launchImageLibrary } from "react-native-image-picker";
 import Video from "react-native-video";
 import socket from "../../sockets/Sockets";
@@ -28,15 +29,12 @@ import MemoryViewer from "../../components/Memories/MemoryViewer";
 import CreateMemoryModal from "../../components/Memories/CreateMemoryModal";
 import { ProfileHeaderSkeleton, ProfileGridSkeleton } from "../../components/Skeleton/ProfileSkeleton";
 import Config from "react-native-config";
-import { carouselTouchProps, isCarouselTouchActive } from "../../components/carouselTouch";
-import { apiFetch } from "../../api/authToken"; // adjust relative path
-// FIXED — this screen used to read a "openMemory" AsyncStorage key that
-// nothing ever wrote (a leftover of the web version's sessionStorage
-// handoff). ActivityPage.js's handleOpenMemory actually hands the
-// target off via this in-memory consumePendingOpenMemory() function —
-// adjust the path below if ActivityPage.js lives somewhere else.
+import { carouselTouchProps } from "../../components/carouselTouch";
+import { apiFetch } from "../../api/authToken";
 import { consumePendingOpenMemory } from "../Activity/ActivityPage";
-const API = Config.API_URL; // swap for your RN env config (e.g. react-native-config)
+import { useRefresh, useSwipeTabs } from "../../hooks/useRefreshAndSwipe";
+
+const API = Config.API_URL;
 
 // ── Count formatter (1000 -> 1K, 1500000 -> 1.5M, etc.) ─────────────────────
 function formatCount(num) {
@@ -58,15 +56,6 @@ function formatCount(num) {
 }
 
 // ── Video grid thumbnail resolver ────────────────────────────────────────
-// Mounting a live <Video> player in every grid cell causes overlapping/
-// bleeding thumbnails on Android (SurfaceView doesn't respect clipping).
-// Prefer a static poster image, in this order:
-//   1. an explicit thumbnail field, if the backend ever adds one
-//   2. a still frame derived from the Cloudinary video URL itself
-//      (no backend change needed — Cloudinary can render any video
-//      frame as a JPEG via URL transformation)
-//   3. fall back to rendering the actual video (muted/paused) only if
-//      neither of the above is possible (e.g. non-Cloudinary URL)
 function cloudinaryVideoThumbnail(url) {
   if (!url || typeof url !== "string") return null;
   if (!url.includes("res.cloudinary.com") || !url.includes("/video/upload/")) return null;
@@ -78,9 +67,8 @@ function cloudinaryVideoThumbnail(url) {
   const before = url.slice(0, idx + marker.length);
   let after = url.slice(idx + marker.length);
 
-  // Swap the video extension for .jpg and grab the frame at 0s (so_0).
   after = after.replace(/\.(mp4|mov|webm|mkv|avi|m4v)(\?.*)?$/i, ".jpg$2");
-  if (!/\.jpg(\?.*)?$/i.test(after)) return null; // unrecognized extension — bail out
+  if (!/\.jpg(\?.*)?$/i.test(after)) return null;
 
   return `${before}so_0/${after}`;
 }
@@ -104,10 +92,6 @@ function VideoGridThumb({ video, style }) {
   if (thumbUri) {
     return <Image source={{ uri: thumbUri }} style={style} resizeMode="cover" />;
   }
-  // Neither an explicit thumbnail nor a derivable Cloudinary frame —
-  // fall back to a real (muted/paused) video render. useTextureView
-  // keeps Android from letting the SurfaceView bleed into neighboring
-  // cells even in this fallback case.
   return (
     <Video
       source={{ uri: video?.media?.[0]?.url }}
@@ -122,21 +106,11 @@ function VideoGridThumb({ video, style }) {
 
 // ── Tab order used for horizontal swipe navigation ──────────────────────────
 const PROFILE_TAB_ORDER = ["posts", "Shorts", "text"];
-const SWIPE_HORIZONTAL_THRESHOLD = 12; // px moved before we commit to a horizontal gesture
-const SWIPE_DIRECTION_RATIO = 2;       // how much more horizontal than vertical movement is required
-const SWIPE_RELEASE_THRESHOLD = 50;    // px needed on release to actually change tabs
 
 function Profilepage() {
   const navigation = useNavigation();
 
   const [posts, setPosts] = useState([]);
-
-  // ── TAB MEMORY — restored via AsyncStorage + useFocusEffect (not a
-  // mount-only effect) because React Navigation stack screens usually
-  // stay mounted underneath when you push a detail screen, so a
-  // mount-only effect would never re-run on "back". Any entry that
-  // ISN'T a return trip (e.g. tapping the Navbar's profile tab) has
-  // nothing to consume, so it stays on "posts".
   const [activeTab, setActiveTab] = useState("posts");
 
   const [user, setUser] = useState(null);
@@ -144,7 +118,7 @@ function Profilepage() {
   const [showRequests, setShowRequests] = useState(false);
   const [requests, setRequests] = useState([]);
 
-  const [listModal, setListModal] = useState(null); // "followers" | "following" | null
+  const [listModal, setListModal] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [modalList, setModalList] = useState([]);
   const [modalLoading, setModalLoading] = useState(false);
@@ -156,76 +130,20 @@ function Profilepage() {
   const [groups, setGroups] = useState([]);
   const [viewerGroupId, setViewerGroupId] = useState(null);
   const [viewerItemId, setViewerItemId] = useState(null);
-  // ← NEW — which sheet (if any) MemoryViewer should auto-open, and which
-  // comment/reply to highlight inside it, from the same pendingOpenMemory
-  // handoff (see setPendingOpenMemory() in ActivityPage.js).
   const [viewerSheet, setViewerSheet] = useState(null);
   const [viewerCommentId, setViewerCommentId] = useState(null);
   const [viewerReplyId, setViewerReplyId] = useState(null);
   const [createModal, setCreateModal] = useState(null);
 
   const scrollViewRef = useRef(null);
-  const itemRefs = useRef({}); // postId -> node, registered by Posts/Shorts/TextPosts
+  const itemRefs = useRef({});
 
-  // ── Swipe left/right on the tab content to move to the next/previous tab.
-  // Only claims the gesture once the drag is clearly more horizontal than
-  // vertical, so the outer vertical ScrollView keeps working normally.
-  const goToAdjacentTab = useCallback((direction) => {
-    setActiveTab((current) => {
-      const idx = PROFILE_TAB_ORDER.indexOf(current);
-      if (idx === -1) return current;
-      const nextIdx = idx + direction;
-      if (nextIdx < 0 || nextIdx >= PROFILE_TAB_ORDER.length) return current;
-      return PROFILE_TAB_ORDER[nextIdx];
-    });
-  }, []);
+  // Screen-wide swipe between the navbar pages (smooth slide + fade)
+  const { panHandlers: swipePanHandlers, screenStyle } =
+    useSwipeToChangeTab({ capture: false, animateScreen: true });
 
-  // NEW — screen-wide swipe to switch the bottom navbar tab (Home/
-  // Search/Notifications/Messages/VideoPage/Profile), same hook used by
-  // HomePage/ExplorePage/ActivityPage/VideoPage. Applied to the outer
-  // container below. Bubble-phase (capture:false): RN asks the deepest
-  // responder candidate first, so wherever the Posts/Shorts/Text grid's
-  // own tabPanResponder (right below) already claims the touch, this
-  // hook never gets a chance there — it only wins on the rest of the
-  // screen (header, memories row, tabs row, edit-profile button, etc.),
-  // which is exactly the split that was asked for.
-  const { panHandlers: swipePanHandlers } = useSwipeToChangeTab({ capture: false });
-
-  // isEligible is checked via the CAPTURE-phase handler below, not the
-  // bubble-phase one. The grid below is full of TouchableOpacity post/
-  // short/text-post thumbnails, and a Touchable claims the responder the
-  // instant a finger touches down — bubble-phase (onMoveShouldSetPanResponder)
-  // is never even consulted once that's happened, so a real swipe over
-  // the grid silently did nothing (same root cause fixed in Video.js for
-  // swiping over video content). Capture-phase handlers run on ancestors
-  // BEFORE the touch reaches the current responder, on every move, which
-  // is the only way to steal an in-progress gesture away from a Touchable
-  // mid-touch — same reasoning as Navbar's own PanResponder needing
-  // capture to steal from its own tab buttons. Because this only claims
-  // once a real horizontal drag crosses the threshold, ordinary taps on
-  // a post/short/text-post thumbnail are completely unaffected.
-const isSwipeEligible = (gestureState) =>
-  !isCarouselTouchActive() &&
-  Math.abs(gestureState.dx) > SWIPE_HORIZONTAL_THRESHOLD &&
-  Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * SWIPE_DIRECTION_RATIO;
-
-  const tabPanResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => false,
-      onStartShouldSetPanResponderCapture: () => false,
-      onMoveShouldSetPanResponder: () => false,
-      onMoveShouldSetPanResponderCapture: (_evt, gestureState) => isSwipeEligible(gestureState),
-      onPanResponderTerminationRequest: () => false,
-      onShouldBlockNativeResponder: () => true,
-      onPanResponderRelease: (_evt, gestureState) => {
-        if (gestureState.dx <= -SWIPE_RELEASE_THRESHOLD) {
-          goToAdjacentTab(1); // swipe left → next tab
-        } else if (gestureState.dx >= SWIPE_RELEASE_THRESHOLD) {
-          goToAdjacentTab(-1); // swipe right → previous tab
-        }
-      },
-    })
-  ).current;
+  // Smooth swipe between Posts / Shorts / Text sub-tabs
+  const tabSwipe = useSwipeTabs({ order: PROFILE_TAB_ORDER, activeTab, setActiveTab });
 
   // ── Restore tab whenever screen regains focus ───────────────────────────
   useFocusEffect(
@@ -249,37 +167,37 @@ const isSwipeEligible = (gestureState) =>
     }, [])
   );
 
-const fetchStory = useCallback(async () => {
-  const uid = user?._id || user?.id;
-  if (!uid) { setStory(null); return; }
-  try {
-    const res = await apiFetch(`${API}/stories/get-user-stories/${uid}`);
-    const data = await res.json();
-    if (!data.success || !data.stories?.length) { setStory(null); return; }
-    setStory({
-      id: uid.toString(),
-      username: user.username || "Unknown",
-      userProfile: user.profilePic || "",
-      isOwn: true,
-      slides: data.stories.map((s) => ({
-        id: s._id,
-        image: s.media?.url || "",
-        type: s.media?.type || s.storyType,
-        likes: s.likesCount || 0,
-        isLive: s.storyType === "live",
-        liveRoomId: s.liveRoomId || null,
-        authorId: uid.toString(),
-        isHiddenFromNonFollowers: s.isHiddenFromNonFollowers || false,
-        viewedByMe: !!s.viewedByMe,
-        textOverlays: s.textOverlays || [],
-        mentions: s.mentions || [],
-        repostAttribution: s.repostAttribution || null,
-      })),
-    });
-  } catch {
-    setStory(null);
-  }
-}, [user?._id, user?.id, user?.username, user?.profilePic]);
+  const fetchStory = useCallback(async () => {
+    const uid = user?._id || user?.id;
+    if (!uid) { setStory(null); return; }
+    try {
+      const res = await apiFetch(`${API}/stories/get-user-stories/${uid}`);
+      const data = await res.json();
+      if (!data.success || !data.stories?.length) { setStory(null); return; }
+      setStory({
+        id: uid.toString(),
+        username: user.username || "Unknown",
+        userProfile: user.profilePic || "",
+        isOwn: true,
+        slides: data.stories.map((s) => ({
+          id: s._id,
+          image: s.media?.url || "",
+          type: s.media?.type || s.storyType,
+          likes: s.likesCount || 0,
+          isLive: s.storyType === "live",
+          liveRoomId: s.liveRoomId || null,
+          authorId: uid.toString(),
+          isHiddenFromNonFollowers: s.isHiddenFromNonFollowers || false,
+          viewedByMe: !!s.viewedByMe,
+          textOverlays: s.textOverlays || [],
+          mentions: s.mentions || [],
+          repostAttribution: s.repostAttribution || null,
+        })),
+      });
+    } catch {
+      setStory(null);
+    }
+  }, [user?._id, user?.id, user?.username, user?.profilePic]);
 
   useEffect(() => { fetchStory(); }, [fetchStory]);
 
@@ -296,17 +214,7 @@ const fetchStory = useCallback(async () => {
 
   useEffect(() => { fetchGroups(); }, [fetchGroups]);
 
-  // FIXED — pick up the "open this exact memory" handoff left by the
-  // notifications screen. This now reads the same in-memory value
-  // ActivityPage.js's handleOpenMemory actually sets (consumed once,
-  // read-and-clear), instead of an AsyncStorage key nothing wrote to.
-  //
-  // ALSO FIXED — this has to be useFocusEffect, not useEffect. Profile is
-  // a tab screen that stays mounted in the background; navigating here
-  // from a notification just brings it into focus, it doesn't remount it
-  // or change user?._id, so a plain useEffect(..., [user?._id]) only ever
-  // ran once and silently missed every later notification tap — you'd
-  // land on the profile page but MemoryViewer would never open.
+  // Pick up the "open this exact memory" handoff from the notifications screen
   useFocusEffect(
     useCallback(() => {
       if (!user?._id) return;
@@ -362,13 +270,18 @@ const fetchStory = useCallback(async () => {
     };
   }, [user?._id, fetchStory]);
 
-  // ── Fetch profile + posts together, on every fresh mount ─────────────────
-  // ── Fetch profile + posts together, on every fresh mount or when the
-  // viewed user changes (e.g. tapping a different author's name while
-  // this screen is already on the stack). ─────────────────────────────
-  // NEW — lifted out of the mount-only effect and into a component-scope
-  // useCallback so the tab-reload subscription below can call the exact
-  // same fetch on demand.
+  const fetchPosts = async (userId) => {
+    const uid = userId ?? user?._id;
+    if (!uid) return;
+    try {
+      const res = await apiFetch(`${API}/auth/get-posts/${uid}`);
+      const data = await res.json();
+      if (data.success) setPosts(data.posts);
+    } catch (err) {
+      console.error("FETCH POSTS ERROR:", err);
+    }
+  };
+
   const fetchProfile = useCallback(async () => {
     try {
       const res = await apiFetch(`${API}/auth/profile`);
@@ -389,37 +302,20 @@ const fetchStory = useCallback(async () => {
     fetchProfile();
   }, [fetchProfile]);
 
-  // NEW — tapping the already-active "Profile" tab reloads this screen:
-  // resets to the "posts" sub-tab, scrolls back to top, and refetches
-  // the profile + posts. Ordinary focus (returning from a post you
-  // opened, or the existing profileReturnTab/profileReturnPostId
-  // restoration above) is untouched — only this explicit tap reloads.
+  // ── Pull-to-refresh + tap-active-tab refresh (shared) ────────────────────
+  const { refreshing, onRefresh } = useRefresh(() =>
+    Promise.all([fetchProfile(), fetchStory(), fetchGroups()])
+  );
+
   useEffect(() => {
     return subscribeTabReload("Profile", () => {
       setActiveTab("posts");
       scrollViewRef.current?.scrollTo?.({ y: 0, animated: true });
-      setLoading(true);
-      fetchProfile();
-      fetchStory();
-      fetchGroups();
+      onRefresh();
     });
-  }, [fetchProfile, fetchStory, fetchGroups]);
+  }, [onRefresh]);
 
-  const fetchPosts = async (userId) => {
-    const uid = userId ?? user?._id;
-    if (!uid) return;
-    try {
-      const res = await apiFetch(`${API}/auth/get-posts/${uid}`);
-      const data = await res.json();
-      if (data.success) setPosts(data.posts);
-    } catch (err) {
-      console.error("FETCH POSTS ERROR:", err);
-    }
-  };
-
-  // ── Scroll to the exact post/short/text-post the user tapped, once
-  // posts have loaded and the active tab has rendered. Uses a ref
-  // registry + measureLayout instead of getElementById/scrollIntoView.
+  // Scroll to the exact post the user tapped when returning
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
@@ -598,7 +494,6 @@ const fetchStory = useCallback(async () => {
     } catch (err) { console.error("Reject failed:", err); }
   };
 
-  // ── window.confirm → Alert.alert with a callback ──────────────────────────
   const handleRemoveOrUnfollow = (targetId) => {
     const isFollowers = listModal === "followers";
     Alert.alert(
@@ -664,12 +559,6 @@ const fetchStory = useCallback(async () => {
   };
   const handleGroupCreated = () => fetchGroups();
   const handleItemsAdded = (groupId) => { fetchGroups(); setViewerGroupId(groupId); };
-  // ← FIXED — belt-and-suspenders against "Cannot update a component
-  // (`Profilepage`) while rendering a different component
-  // (`MemoryViewer`)". MemoryViewer.js already defers its own risky
-  // call site (auto-close on an emptied group) with a setTimeout, but
-  // wrapping the actual state updates here too means this stays safe
-  // even if that guard is ever removed or a new call site is added.
   const handleGroupEmptied = () => {
     setTimeout(() => {
       setViewerGroupId(null);
@@ -689,10 +578,6 @@ const fetchStory = useCallback(async () => {
       setViewerReplyId(null);
     }, 0);
   };
-  // ← Auto-advance target for MemoryViewer: given the group id it just
-  // finished, jump to the next group in the row (same order as
-  // MemoriesRow renders `groups`). MemoryViewer calls this itself when
-  // it reaches the last item of a group instead of closing.
   const switchToGroup = (nextGroupId) => {
     setTimeout(() => {
       setViewerGroupId(nextGroupId);
@@ -700,24 +585,14 @@ const fetchStory = useCallback(async () => {
     }, 0);
   };
 
-  // ── Image/video picking — react-native-image-picker instead of
-  // <input type="file">.
-const pickImages = async () => {
-  const result = await launchImageLibrary({ mediaType: "photo", selectionLimit: 0 });
-  if (result.didCancel || !result.assets?.length) return;
-
-  // ← FIX: used to await ImageResizer.createResizedImage() for every
-  // selected photo (Promise.all) BEFORE navigating, so nothing appeared
-  // on screen until every image finished downscaling — the wait scaled
-  // with photo count and original resolution, unlike pickVideo/text
-  // posts which navigate immediately. Navigate with the raw picker
-  // URIs right away; EditImage.js now does the 1440px downscale itself,
-  // per image, in the background, with a loading state while it runs.
-  navigation.navigate("EditImage", {
-    images: result.assets.map((a) => a.uri),
-    files: result.assets, // keep originals around for size checks / metadata
-  });
-};
+  const pickImages = async () => {
+    const result = await launchImageLibrary({ mediaType: "photo", selectionLimit: 0 });
+    if (result.didCancel || !result.assets?.length) return;
+    navigation.navigate("EditImage", {
+      images: result.assets.map((a) => a.uri),
+      files: result.assets,
+    });
+  };
 
   const pickVideo = async () => {
     const result = await launchImageLibrary({ mediaType: "video" });
@@ -727,16 +602,16 @@ const pickImages = async () => {
 
   if (loading) {
     return (
-      <View style={styles.container} {...swipePanHandlers}>
+      <Animated.View style={[styles.container, screenStyle]} {...swipePanHandlers}>
         <ProfileHeaderSkeleton />
         <ProfileGridSkeleton />
         <Navbar />
-      </View>
+      </Animated.View>
     );
   }
 
   return (
-    <View style={styles.container} {...swipePanHandlers}>
+    <Animated.View style={[styles.container, screenStyle]} {...swipePanHandlers}>
 
       {/* ── Followers/Following Modal ── */}
       <Modal visible={!!listModal} transparent animationType="fade" onRequestClose={closeModal}>
@@ -801,7 +676,18 @@ const pickImages = async () => {
         </TouchableOpacity>
       </Modal>
 
-      <ScrollView ref={scrollViewRef} style={{ flex: 1 }}>
+      <ScrollView
+        ref={scrollViewRef}
+        style={{ flex: 1 }}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor="rgb(234,182,118)"
+            colors={["rgb(234,182,118)"]}
+          />
+        }
+      >
 
         {/* ── Top Bar ── */}
         <View style={styles.topBar}>
@@ -951,10 +837,13 @@ const pickImages = async () => {
           ))}
         </View>
 
-        <View style={{ padding: 10 }} {...tabPanResponder.panHandlers}>
-          {activeTab === "posts" && <Posts posts={posts} navigation={navigation} itemRefs={itemRefs} />}
-          {activeTab === "Shorts" && <Shorts posts={posts} userId={user?._id} navigation={navigation} itemRefs={itemRefs} />}
-          {activeTab === "text" && <TextPosts posts={posts} navigation={navigation} itemRefs={itemRefs} />}
+        {/* ── Tab content: slides with your finger ── */}
+        <View style={{ overflow: "hidden" }} {...tabSwipe.panHandlers}>
+          <Animated.View style={{ padding: 10, transform: [{ translateX: tabSwipe.x }] }}>
+            {activeTab === "posts" && <Posts posts={posts} navigation={navigation} itemRefs={itemRefs} />}
+            {activeTab === "Shorts" && <Shorts posts={posts} userId={user?._id} navigation={navigation} itemRefs={itemRefs} />}
+            {activeTab === "text" && <TextPosts posts={posts} navigation={navigation} itemRefs={itemRefs} />}
+          </Animated.View>
         </View>
       </ScrollView>
 
@@ -991,7 +880,7 @@ const pickImages = async () => {
       )}
 
       {!showStoryViewer && !viewerGroupId && <Navbar />}
-    </View>
+    </Animated.View>
   );
 }
 
@@ -1055,7 +944,6 @@ const Shorts = ({ posts, userId, navigation, itemRefs }) => {
   );
 };
 
-// ── Expandable text for the profile's Text tab ─────────────────────────────
 const ExpandableProfileText = ({ text, limit = 180 }) => {
   const [expanded, setExpanded] = useState(false);
   if (!text) return null;
@@ -1108,24 +996,24 @@ const TextPosts = ({ posts, navigation, itemRefs }) => {
 
           {!!post?.text && <ExpandableProfileText text={post.text} />}
 
-{post?.media?.length > 0 && (
-  <ScrollView
-    horizontal
-    nestedScrollEnabled
-    directionalLockEnabled
-    showsHorizontalScrollIndicator={false}
-    style={{ paddingHorizontal: 12, paddingBottom: 12 }}
-    {...carouselTouchProps}
-  >
-    {post.media.map((m, i) => (
-      <Image
-        key={i}
-        source={{ uri: m.url }}
-        style={{ width: post.media.length === 1 ? 300 : 160, height: 160, borderRadius: 10, marginRight: 6 }}
-      />
-    ))}
-  </ScrollView>
-)}
+          {post?.media?.length > 0 && (
+            <ScrollView
+              horizontal
+              nestedScrollEnabled
+              directionalLockEnabled
+              showsHorizontalScrollIndicator={false}
+              style={{ paddingHorizontal: 12, paddingBottom: 12 }}
+              {...carouselTouchProps}
+            >
+              {post.media.map((m, i) => (
+                <Image
+                  key={i}
+                  source={{ uri: m.url }}
+                  style={{ width: post.media.length === 1 ? 300 : 160, height: 160, borderRadius: 10, marginRight: 6 }}
+                />
+              ))}
+            </ScrollView>
+          )}
         </TouchableOpacity>
       ))}
     </View>
@@ -1190,7 +1078,3 @@ const ownProfileRingWrap = { width: 96, height: 96, borderRadius: 48, background
 const ownProfileRingInner = { width: "100%", height: "100%", borderRadius: 48, backgroundColor: "#fff", alignItems: "center", justifyContent: "center", padding: 2 };
 const ownProfileImgNoBorder = { width: 84, height: 84, borderRadius: 42 };
 const ownProfileImgFallbackNoBorder = { width: 84, height: 84, borderRadius: 42, backgroundColor: "#b0b0b0", alignItems: "center", justifyContent: "center" };
-
-
-
-

@@ -35,9 +35,10 @@ import {
 import Slider from "@react-native-community/slider";
 import Svg, { Defs, RadialGradient, Stop, Rect, Circle } from "react-native-svg";
 import { ColorMatrix } from "react-native-color-matrix-image-filters";
-import ViewShot from "react-native-view-shot";
+import ViewShot, { captureRef } from "react-native-view-shot";
+import ReactNativeBlobUtil from "react-native-blob-util";
 import { useNavigation, useRoute } from "@react-navigation/native";
-import { parseCssFilterToMatrix } from "./CropImage";
+import { parseCssFilterToMatrix, inspectImageFile, isUsableImage } from "./CropImage";
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
 
@@ -336,7 +337,45 @@ useEffect(() => {
     try {
       // Let the freshly shown image paint before capturing.
       await new Promise((r) => setTimeout(r, 120));
-      const uri = await frameShotRef.current.capture();
+
+      let uri = null;
+
+      // 1) Normal temp-file capture, but VERIFIED to be a real image — view-shot can
+      //    hand back a path to an empty file. Retried once: a capture taken right
+      //    after an edit can race the repaint.
+      for (let attempt = 1; attempt <= 2 && !uri; attempt++) {
+        const shot = await frameShotRef.current.capture();
+        const status = await inspectImageFile(shot);
+        console.log(`[CAPTURE] #${index} try ${attempt} ${shot} size=${status.size} decodes=${status.decodes}`);
+        if (isUsableImage(status)) uri = shot;
+        else await new Promise((r) => setTimeout(r, 300));
+      }
+
+      // 2) Still empty: ask view-shot for the pixels as base64 and write the file
+      //    ourselves, which skips view-shot's temp-file writing entirely.
+      if (!uri) {
+        const b64 = await captureRef(frameShotRef.current, {
+          format: "jpg",
+          quality: 0.92,
+          result: "base64",
+        });
+        console.log(`[CAPTURE] #${index} base64 length=${b64 ? b64.length : 0}`);
+        if (b64 && b64.length > 1000) {
+          const path = `${ReactNativeBlobUtil.fs.dirs.CacheDir}/edit-${Date.now()}-${index}.jpg`;
+          await ReactNativeBlobUtil.fs.writeFile(path, b64, "base64");
+          const status = await inspectImageFile(`file://${path}`);
+          console.log(`[CAPTURE] #${index} wrote ${path} size=${status.size} decodes=${status.decodes}`);
+          if (isUsableImage(status)) uri = `file://${path}`;
+        }
+      }
+
+      if (!uri) {
+        // Nothing usable: AddImagePost.js rebuilds this image from the source
+        // (crop + filter) via getEditedImage() instead.
+        console.warn("EditPost: frame capture produced an empty image for index", index);
+        return null;
+      }
+
       setCapturedUris((prev) => {
         const next = [...prev];
         next[index] = uri;
@@ -366,7 +405,9 @@ useEffect(() => {
     // capturedUris from a filmstrip switch).
     const finalCaptures = [...capturedUris];
     const uri = await captureCurrentFrame(currentIndex);
-    if (uri) finalCaptures[currentIndex] = uri;
+    // A failed/empty fresh capture must not leave an older, stale one in place:
+    // null makes AddImagePost.js rebuild this image from the current edits.
+    finalCaptures[currentIndex] = uri || null;
 
     // Kept as a fallback for any image whose capture failed (e.g. the
     // frame never actually laid out) — AddImagePost.js already knows

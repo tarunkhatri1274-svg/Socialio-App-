@@ -21,6 +21,7 @@ import {
 import Icon from "react-native-vector-icons/FontAwesome5";
 import FeatherIcon from "react-native-vector-icons/Feather";
 import { apiFetch, getCachedUser } from "../../api/authToken"; // adjust relative path — count folders to src/api/authToken.js
+import usePostOptions from "./usePostOptions";
 import Config from "react-native-config";
 import { useNavigation, useRoute } from "@react-navigation/native";
 import socket, { joinPostRoom, leavePostRoom } from "../../sockets/Sockets";
@@ -354,11 +355,15 @@ function LikesSummary({ likedByUsers, likeCount, hideLikeCount, isOwner, onOpen 
 function TagsRow({ tags, postId, isOwner, onTagsUpdate }) {
   const [tagInput, setTagInput] = useState("");
   const [showInput, setShowInput] = useState(false);
+  const [tagResults, setTagResults] = useState([]);
+  const tagTimer = useRef(null);
   const navigation = useNavigation();
 
-  const addTag = async () => {
-    const t = tagInput.trim().toLowerCase().replace(/\s+/g, "_");
+  const addTag = async (override) => {
+    const raw = typeof override === "string" ? override : tagInput;
+    const t = raw.trim().replace(/^[@#]/, "").toLowerCase().replace(/\s+/g, "_");
     if (!t) return;
+    setTagResults([]);
     try {
       const res = await apiFetch(`${API}/auth/add-tag/${postId}`, {
         method: "PATCH",
@@ -373,6 +378,26 @@ function TagsRow({ tags, postId, isOwner, onTagsUpdate }) {
       }
     } catch {}
   };
+
+  // ── suggest users while typing (tags are username mentions) ──
+  const handleTagInput = (val) => {
+    setTagInput(val);
+    clearTimeout(tagTimer.current);
+    const q = val.trim().replace(/^[@#]/, "");
+    if (!q) { setTagResults([]); return; }
+    tagTimer.current = setTimeout(async () => {
+      try {
+        const res = await apiFetch(`${API}/auth/search?q=${encodeURIComponent(q)}`);
+        if (!res.ok) { setTagResults([]); return; }
+        const data = await res.json();
+        const list = Array.isArray(data) ? data : data.users || [];
+        setTagResults(
+          list.filter((u) => u.username && !(tags || []).includes(u.username.toLowerCase())).slice(0, 6)
+        );
+      } catch {}
+    }, 300);
+  };
+  const pickTagUser = (u) => addTag(u.username);
 
   const removeTag = async (tag) => {
     try {
@@ -418,7 +443,7 @@ const goToTaggedUser = async (tag) => {
           <View style={{ flexDirection: "row", gap: 4, alignItems: "center" }}>
             <TextInput
               value={tagInput}
-              onChangeText={setTagInput}
+              onChangeText={handleTagInput}
               onSubmitEditing={addTag}
               placeholder="tag..."
               autoFocus
@@ -436,6 +461,16 @@ const goToTaggedUser = async (tag) => {
             <Text style={{ color: "#666", fontSize: 12 }}>+ tag</Text>
           </TouchableOpacity>
         ))}
+      {isOwner && showInput && tagResults.length > 0 && (
+        <View style={[styles.collabResults, { width: "100%" }]}>
+          {tagResults.map((u) => (
+            <TouchableOpacity key={u._id} onPress={() => pickTagUser(u)} style={styles.collabResultRow}>
+              <Avatar src={u.profilePic} username={u.username} size={28} />
+              <Text style={{ fontSize: 13, fontWeight: "600" }}>{u.username}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
     </View>
   );
 }
@@ -733,14 +768,10 @@ function PostCard({ post, isFirst, onDeleted, onLayout, pendingSheet = null }) {
   const [showLikers, setShowLikers] = useState(false);
   const [showComments, setShowComments] = useState(false);
   const [showShare, setShowShare] = useState(false);
-  const [isHidden, setIsHidden] = useState(post?.isHiddenFromNonFollowers || false);
-  const [isNotInterested, setIsNotInterested] = useState(post?.isNotInterested || false);
-  const [isBlocked, setIsBlocked] = useState(false);
   const [comments, setComments] = useState(post?.comments ?? []);
   const [tags, setTags] = useState(post?.tags ?? []);
 const [collaborators, setCollaborators] = useState(post?.collaborators ?? []);
 const [sharesCount, setSharesCount] = useState(post?.shares?.length ?? post?.sharesCount ?? 0);
-const [removedFromView, setRemovedFromView] = useState(false);
   // ← NEW — see Post.js's PostCard for the same pattern.
   const [highlightCommentId, setHighlightCommentId] = useState(null);
   const [highlightReplyId, setHighlightReplyId] = useState(null);
@@ -772,6 +803,29 @@ const [removedFromView, setRemovedFromView] = useState(false);
 
   const username = post?.author?.username || "Unknown";
   const authorId = post?.author?._id || post?.author;
+  // ── all ⋮-menu actions live in usePostOptions.js ──
+  const {
+    options: menuOptions,
+    isHidden,
+    isNotInterested,
+    isBlocked,
+    removedFromView,
+    setRemovedFromView,
+    acceptedCollaborators,
+    myCollabEntry,
+  } = usePostOptions({
+    post: post,
+    isOwner,
+    authorId,
+    username,
+    noun: "post",
+    menu: menu,
+    currentUserId: MY_ID,
+    collaborators: collaborators,
+    onCollaboratorsChange: setCollaborators,
+    onDeleted,
+  });
+
 
   useEffect(() => {
     if (!post?._id) return;
@@ -911,122 +965,20 @@ socket.on("postShared", onShareCount);
   // never unlikes, same convention as the image/video post cards.
   const handleBodyTap = useDoubleTap(triggerBurst);
 
-  const handleDelete = async () => {
-    menu.close();
-    const ok = await confirmAsync("Delete this post?");
-    if (!ok) return;
-    try {
-      const res = await apiFetch(`${API}/auth/delete-post/${post._id}`, { method: "DELETE"});
-      const data = await res.json();
-      if (res.ok) {
-        setRemovedFromView(true);
-        onDeleted?.(post._id);
-      } else {
-        Alert.alert("Error", data.message);
-      }
-    } catch (err) {
-      console.log(err);
-    }
-  };
 
-  const handleHide = async () => {
-    menu.close();
-    try {
-      const res = await apiFetch(`${API}/auth/hide-from-non-followers/${post._id}`, { method: "PATCH"});
-      const data = await res.json();
-      if (res.ok) {
-        setIsHidden(data.isHidden);
-        Alert.alert("", data.message);
-      }
-    } catch (err) {
-      console.log(err);
-    }
-  };
 
-  const handleNotInterested = async () => {
-    menu.close();
-    try {
-      const res = await apiFetch(`${API}/auth/not-interested/${post._id}`, { method: "PATCH"});
-      const data = await res.json();
-      if (data.success) {
-        setIsNotInterested((prev) => !prev);
-        Alert.alert("", data.message);
-      }
-    } catch (err) {
-      console.log(err);
-    }
-  };
 
-  const handleBlock = async () => {
-    menu.close();
-    const ok = await confirmAsync(`Block ${username}?`);
-    if (!ok) return;
-    try {
-      const res = await apiFetch(`${API}/auth/block/${authorId}`, { method: "POST"});
-      const data = await res.json();
-      if (data.success) setIsBlocked(true);
-    } catch (err) {
-      console.log(err);
-    }
-  };
 
-  const handleRemoveCollab = async (collabUser) => {
-    menu.close();
-    const isLeavingSelf = collabUser?._id?.toString() === MY_ID;
-    const confirmMsg = isLeavingSelf
-      ? "Remove yourself as a collaborator on this post? It will no longer show on your profile."
-      : `Remove ${collabUser?.username} as a collaborator? The post will no longer show on their profile.`;
-    const ok = await confirmAsync(confirmMsg);
-    if (!ok) return;
-
-    try {
-      const res = await apiFetch(`${API}/auth/remove-collaborator/${post._id}`, {
-        method: "PATCH",
-       
-        body: JSON.stringify({ userId: collabUser._id }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setCollaborators(data.collaborators ?? []);
-        if (isLeavingSelf && !isOwner) {
-          setRemovedFromView(true);
-          onDeleted?.(post._id);
-        }
-      }
-    } catch {}
-  };
 
 const goToProfile = (id) => {
   if (id) navigation.navigate("UserProfile", { userId: id });
 };
 
-  const acceptedCollaborators = (collaborators || []).filter((c) => c.status === "accepted");
-  const myCollabEntry = acceptedCollaborators.find((c) => (c.user?._id ?? c.user)?.toString() === MY_ID);
 
   // ── NEW: full collaborator roster (author + accepted collaborators),
   // used by CollabListSheet — same shape as likedByUsers.
   const allCollabPeople = [post?.author, ...acceptedCollaborators.map((c) => c.user)].filter(Boolean);
 
-  const menuOptions = isOwner
-    ? [
-        { label: "Delete", icon: "trash", color: "#e53935", action: handleDelete },
-        { label: isHidden ? "Show to everyone" : "Hide from non-followers", icon: "eye-slash", color: "#222", action: handleHide },
-        ...acceptedCollaborators.map((c) => ({
-          label: `Remove collab: ${c.user?.username}`,
-          icon: "ban",
-          color: "#e53935",
-          action: () => handleRemoveCollab(c.user),
-        })),
-      ]
-    : isBlocked
-    ? [{ label: "Blocked", icon: "ban", color: "#888", disabled: true, action: () => {} }]
-    : [
-        { label: isNotInterested ? "Interested" : "Not Interested", icon: "thumbs-down", color: "#222", action: handleNotInterested },
-        { label: `Block ${username}`, icon: "ban", color: "#e53935", action: handleBlock },
-        ...(myCollabEntry
-          ? [{ label: "Remove myself as collaborator", icon: "ban", color: "#e53935", action: () => handleRemoveCollab(myCollabEntry.user) }]
-          : []),
-      ];
 
   if (removedFromView) return null;
 

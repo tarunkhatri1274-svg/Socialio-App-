@@ -8,6 +8,8 @@ import {
   ActivityIndicator,
   Alert,
   Platform,
+  RefreshControl,
+  Animated
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { apiFetch, getCachedUser } from "../../api/authToken"; // adjust relative path
@@ -15,7 +17,7 @@ import Svg, { Path, Circle, Line } from "react-native-svg";
 import Config from "react-native-config";
 import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import { playAlertSound } from "./AlertSound"; // adjust path
-
+import { useRefresh, useSwipeTabs } from "../../hooks/useRefreshAndSwipe";
 
 import socket from "../../sockets/Sockets";
 
@@ -39,6 +41,7 @@ import Navbar, { subscribeTabReload, useSwipeToChangeTab } from "../../component
 // HomePage.js, so a story notification opens immediately without a
 // visible stop on the home screen first.
 import StoryViewer from "../../components/StoryBar/StoryViewer";
+import { AnimatedView } from "react-native-reanimated/lib/typescript/component/View";
 
 const API = Config.API_URL;
 
@@ -557,7 +560,7 @@ function ActivityPage() {
   // starts on something scrollable elsewhere on the screen still behaves
   // normally; this only kicks in when nothing more specific claims the
   // gesture first.
-  const { panHandlers } = useSwipeToChangeTab({ capture: false });
+  const { panHandlers, screenStyle } = useSwipeToChangeTab({ capture: false, animateScreen: true });
 
   const loadPage = useCallback(async (pageNum) => {
     try {
@@ -572,7 +575,7 @@ function ActivityPage() {
       setLoading(false);
     }
   }, []);
-
+const { refreshing, onRefresh } = useRefresh(() => loadPage(1));
   useEffect(() => {
     (async () => {
           await loadLocalCaches();
@@ -588,24 +591,18 @@ function ActivityPage() {
   );
   // NEW — tapping the already-active "Notifications" tab reloads this
   // screen (refetch page 1 + scroll to top) instead of doing nothing.
-  useEffect(() => {
-    return subscribeTabReload("Notifications", () => {
-      try {
-        if (notifications.length > 0) {
-          sectionListRef.current?.scrollToLocation?.({
-            sectionIndex: 0,
-            itemIndex: 0,
-            animated: true,
-            viewPosition: 0,
-          });
-        }
-      } catch {
-        // scrollToLocation throws if there's nothing to scroll to yet — ignore
+useEffect(() => {
+  return subscribeTabReload("Notifications", () => {
+    try {
+      if (notifications.length > 0) {
+        sectionListRef.current?.scrollToLocation?.({
+          sectionIndex: 0, itemIndex: 0, animated: true, viewPosition: 0,
+        });
       }
-      setLoading(true);
-      loadPage(1);
-    });
-  }, [loadPage, notifications.length]);
+    } catch {}
+    onRefresh();
+  });
+}, [onRefresh, notifications.length]);
 
   useEffect(() => {
     // FIXED — "receiveNotification" socket payloads don't reliably carry
@@ -923,7 +920,7 @@ const handleNewNotification = (notif) => {
   );
 
   return (
-    <View style={styles.container} {...panHandlers}>
+    <Animated.View style={styles.container} {...panHandlers}>
       <View style={styles.header}>
         <Text style={styles.heading}>Notifications</Text>
       </View>
@@ -947,6 +944,7 @@ const handleNewNotification = (notif) => {
           renderSectionHeader={({ section }) => <Text style={styles.sectionLabel}>{section.title}</Text>}
           stickySectionHeadersEnabled={Platform.OS === "ios"}
           contentContainerStyle={{ paddingBottom: 90 }}
+          refreshing={refreshing} onRefresh={onRefresh}
           ListFooterComponent={
             hasMore ? (
               <TouchableOpacity style={styles.loadMoreBtn} onPress={() => loadPage(page + 1)}>
@@ -975,7 +973,7 @@ const handleNewNotification = (notif) => {
           close={() => setDirectStory(null)}
         />
       )}
-    </View>
+    </Animated.View>
   );
 }
 

@@ -27,27 +27,18 @@ import Video from "react-native-video";
 import ReactNativeBlobUtil from "react-native-blob-util";
 import { CameraRoll } from "@react-native-camera-roll/camera-roll";
 import LinearGradient from "react-native-linear-gradient";
-import {
-  RTCPeerConnection,
-  RTCSessionDescription,
-  RTCIceCandidate,
-  RTCView,
-} from "react-native-webrtc";
 import { apiFetch, getCachedUser, saveAuthSession } from "../../api/authToken"; // adjust relative path
+
+import usePostOptions from "./usePostOptions";
+import { recordPostView } from "../State/ViewStore";
 import Config from "react-native-config";
 import { useNavigation, useIsFocused } from "@react-navigation/native";
 import { useSwipeToChangeTab } from "../Navbar/Navbar";
 import socket from "../../sockets/Sockets";
+import FeedStoryPreview from "../StoryBar/FeedStoryPreview";
 import CommentSection from "./CommentSection";
 import ShareSheet from "./ShareSheet";
 import { useFollowStore, initFollowStore, addFollowing, removeFollowing } from "../../pages/Profile/UseFollowState";
-import {
-  getStoryRuntime,
-  subscribeStory,
-  pushComment,
-  setRuntimeComments,
-  setLikeState,
-} from "../State/SyncStoryStore";
 import { isPostSaved, toggleSavedPost, subscribeSavedPosts } from "../State/SavedPostStore";
 
 const API = Config.API_URL;
@@ -588,506 +579,6 @@ function CollabRow({ collaborators, postId, isOwner, onCollabUpdate }) {
   );
 }
 
-/* ── Story preview — identical in spirit to the FeedStoryPreview built for
-   Homepage.js/MemoryViewer.js. Same WebRTC live-stream handling via
-   react-native-webrtc, same text-overlay/mention/repost-attribution
-   layers, same live-status states. ── */
-function ReelStoryPreview({ story, onClose, navigation }) {
-    const [currentUser, setCurrentUser] = useState({});
-  useEffect(() => {
-    getCachedUser().then(setCurrentUser);
-  }, []);
-  const currentUserId = (currentUser?._id || currentUser?.id)?.toString();
-
-  const [slideIndex, setSlideIndex] = useState(0);
-  const [liked, setLiked] = useState(false);
-  const [likesCount, setLikesCount] = useState(0);
-  const [viewers, setViewers] = useState([]);
-  const [isHidden, setIsHidden] = useState(false);
-  const [comment, setComment] = useState("");
-  const menu = useAnchoredMenu();
-  const [showViewers, setShowViewers] = useState(false);
-  const [liveComments, setLiveComments] = useState([]);
-  const [accessDenied, setAccessDenied] = useState(null);
-
-  const slides = story?.slides || [];
-  const slide = slides[slideIndex] || {};
-  const isOwn = !!story?.isOwn;
-  const isLiveSlide = slide?.type === "live" || slide?.isLive === true;
-  const isVideo = slide.type === "video" || slide.image?.includes(".mp4") || slide.image?.includes("video");
-
-  const [liveStatus, setLiveStatus] = useState(null);
-  const [liveStream, setLiveStream] = useState(null);
-  const livePcRef = useRef(null);
-
-  useEffect(() => {
-    if (!isLiveSlide || !slide?.liveRoomId) {
-      setLiveStatus(null);
-      setLiveStream(null);
-      return;
-    }
-
-    setLiveStatus("connecting");
-    setLiveStream(null);
-
-    const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
-    livePcRef.current = pc;
-
-    pc.ontrack = (event) => {
-      if (event.streams?.[0]) {
-        setLiveStream(event.streams[0]);
-        setLiveStatus("live");
-      }
-    };
-
-    const iceBuffer = [];
-
-    const handleOffer = async ({ from, offer }) => {
-      if (pc.signalingState !== "stable") return;
-      try {
-        await pc.setRemoteDescription(new RTCSessionDescription(offer));
-        for (const c of iceBuffer) {
-          try {
-            await pc.addIceCandidate(new RTCIceCandidate(c));
-          } catch {}
-        }
-        iceBuffer.length = 0;
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        socket.emit("liveAnswer", { to: from, answer });
-      } catch (e) {
-        console.error("Failed to handle live offer:", e);
-      }
-    };
-
-    const handleIce = async ({ candidate }) => {
-      if (!candidate) return;
-      try {
-        if (pc.remoteDescription) await pc.addIceCandidate(new RTCIceCandidate(candidate));
-        else iceBuffer.push(candidate);
-      } catch (e) {
-        console.error("ICE error:", e);
-      }
-    };
-
-    pc.onicecandidate = ({ candidate }) => {
-      if (candidate) socket.emit("iceCandidate", { to: slide.authorId, candidate });
-    };
-
-    const handleDenied = ({ roomId, reason }) => {
-      if (roomId !== slide.liveRoomId) return;
-      setLiveStatus(reason === "not_following" ? "denied" : "ended");
-    };
-
-    const handleEnded = ({ roomId }) => {
-      if (roomId !== slide.liveRoomId) return;
-      setLiveStatus("ended");
-      setTimeout(() => onClose(), 2500);
-    };
-
-    socket.on("liveOffer", handleOffer);
-    socket.on("iceCandidate", handleIce);
-    socket.on("liveAccessDenied", handleDenied);
-    socket.on("liveEnded", handleEnded);
-
-    socket.emit("joinLive", { roomId: slide.liveRoomId, viewerId: currentUserId });
-
-    return () => {
-      socket.off("liveOffer", handleOffer);
-      socket.off("iceCandidate", handleIce);
-      socket.off("liveAccessDenied", handleDenied);
-      socket.off("liveEnded", handleEnded);
-      socket.emit("leaveLive", { roomId: slide.liveRoomId, viewerId: currentUserId });
-      pc.close();
-      livePcRef.current = null;
-    };
-  }, [isLiveSlide, slide?.liveRoomId, slide?.authorId, currentUserId]);
-
-  useEffect(() => setSlideIndex(0), [story?.id]);
-
-  useEffect(() => {
-    if (!slide?.id) return;
-    socket.emit("joinStory", { storyId: slide.id, viewerId: currentUserId });
-    return () => socket.emit("leaveStory", slide.id);
-  }, [slide?.id, currentUserId]);
-
-  useEffect(() => {
-    if (!slide?.id) return;
-    menu.close();
-    setAccessDenied(null);
-
-    const runtime = getStoryRuntime(slide.id);
-    setLiveComments(runtime.comments);
-    setLikesCount(runtime.likesCount);
-    setLiked(runtime.liked);
-
-    const fetchData = async () => {
-      try {
-        if (isOwn) {
-          const res = await apiFetch(`${API}/stories/viewers/${slide.id}`);
-          const data = await res.json();
-          if (data.success) {
-            setViewers(data.viewers ?? []);
-            const likedNow = (data.likedBy ?? []).some((u) => u._id?.toString() === currentUserId);
-            setLikesCount(data.likesCount ?? 0);
-            setLiked(likedNow);
-            setIsHidden(slide.isHiddenFromNonFollowers || false);
-            setLikeState(slide.id, { likesCount: data.likesCount ?? 0, liked: likedNow });
-          }
-        } else if (!isLiveSlide) {
-          const res = await apiFetch(`${API}/stories/like-state/${slide.id}`);
-          if (res.status === 403) {
-            setAccessDenied("not_following");
-            return;
-          }
-          const data = await res.json();
-          if (data.success) {
-            setLikesCount(data.likesCount ?? 0);
-            setLiked(!!data.liked);
-            setLikeState(slide.id, { likesCount: data.likesCount ?? 0, liked: !!data.liked });
-          }
-          apiFetch(`${API}/stories/view-story/${slide.id}`, { method: "PUT" }).catch(() => {});
-        }
-        if (!runtime.commentsFetched) {
-          try {
-            const cRes = await apiFetch(`${API}/stories/comments/${slide.id}`);
-            const cData = await cRes.json();
-            if (cData?.success && Array.isArray(cData.comments)) setRuntimeComments(slide.id, cData.comments);
-          } catch (err) {
-            console.error("[fetch-comments] failed:", err.message);
-          }
-        }
-      } catch (err) {
-        console.error("[fetch-data] failed:", err.message);
-      }
-    };
-    fetchData();
-
-    const unsubscribe = subscribeStory(slide.id, (s) => {
-      setLiveComments(s.comments);
-      setLikesCount(s.likesCount);
-      setLiked(s.liked);
-    });
-
-    const onLikes = ({ likesCount: count }) => setLikeState(slide.id, { likesCount: count });
-    const onComment = (payload) => pushComment(slide.id, payload);
-    socket.on(`story:${slide.id}:likes`, onLikes);
-    socket.on(`story:${slide.id}:comment`, onComment);
-    return () => {
-      socket.off(`story:${slide.id}:likes`, onLikes);
-      socket.off(`story:${slide.id}:comment`, onComment);
-      unsubscribe();
-    };
-  }, [slide?.id, isOwn, isLiveSlide]);
-
-  const handlePrev = () => {
-    if (slideIndex > 0) setSlideIndex((i) => i - 1);
-  };
-  const handleNext = () => {
-    if (slideIndex < slides.length - 1) setSlideIndex((i) => i + 1);
-    else onClose();
-  };
-
-  const handleLike = async () => {
-    if (!slide?.id) return;
-    try {
-      const res = await apiFetch(`${API}/stories/like-story/${slide.id}`, { method: "PUT" });
-      const data = await res.json();
-      if (data.success) {
-        const nextLiked = !liked;
-        setLiked(nextLiked);
-        setLikesCount(data.likesCount);
-        setLikeState(slide.id, { likesCount: data.likesCount, liked: nextLiked });
-      } else if (res.status === 403) {
-        setAccessDenied("not_following");
-      }
-    } catch (err) {
-      console.error("[like-story] failed:", err.message);
-    }
-  };
-
-  const handleSendComment = () => {
-    if (!comment.trim() || !slide?.id || accessDenied) return;
-    socket.emit("storyComment", {
-      storyId: slide.id,
-      userId: currentUserId,
-      username: currentUser.username,
-      text: comment,
-    });
-    setComment("");
-  };
-
-  const handleHideFromNonFollowers = async () => {
-    if (!slide?.id) return;
-    try {
-      const res = await apiFetch(`${API}/stories/hide-from-non-followers/${slide.id}`, { method: "PATCH"});
-      const data = await res.json();
-      if (res.ok) {
-        setIsHidden(data.isHiddenFromNonFollowers);
-        menu.close();
-      } else Alert.alert("Error", data.message);
-    } catch (err) {
-      console.error("[hide-from-non-followers] failed:", err.message);
-    }
-  };
-
-  const handleDelete = async () => {
-    if (!slide?.id) return;
-    const ok = await confirmAsync("Delete this story?");
-    if (!ok) return;
-    try {
-      const res = await apiFetch(`${API}/stories/delete-story/${slide.id}`, { method: "DELETE" });
-      if (res.ok) onClose();
-    } catch (err) {
-      console.error("[delete-story] failed:", err.message);
-      }
-  };
-
-  const goToViewerProfile = (id) => {
-    onClose();
-    if (!id) return;
-    // FIX: same own-profile redirect as elsewhere — don't send the
-    // current user to the generic viewer screen for their own id.
-    if (id?.toString() === currentUserId) {
-      navigation.navigate("MainTabs", { screen: "Profile" });
-    } else {
-      navigation.navigate("UserProfile", { userId: id });
-    }
-  };
-
-  if (!story) return null;
-
-  if (accessDenied) {
-    return (
-      <Modal visible transparent animationType="fade" onRequestClose={onClose}>
-        <TouchableOpacity style={RP.overlay} activeOpacity={1} onPress={onClose}>
-          <TouchableOpacity activeOpacity={1} style={[RP.card, RP.deniedCenter]}>
-            <Avatar src={story.userProfile} username={story.username} size={56} />
-            <Text style={{ color: "#fff", fontSize: 16, fontWeight: "700", marginTop: 8 }}>Follow to view this story</Text>
-            <Text style={{ color: "rgba(255,255,255,0.6)", fontSize: 13, textAlign: "center", marginTop: 4 }}>
-              Only {story.username}'s followers can see this story.
-            </Text>
-            <TouchableOpacity onPress={onClose} style={RP.deniedCloseBtn}>
-              <Text style={{ color: "#fff", fontWeight: "600" }}>Close</Text>
-            </TouchableOpacity>
-          </TouchableOpacity>
-        </TouchableOpacity>
-      </Modal>
-    );
-  }
-
-  return (
-    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
-      <View style={RP.overlay}>
-        <View style={RP.card}>
-          {slides.length > 1 && (
-            <View style={RP.progressWrap}>
-              {slides.map((_, i) => (
-                <View key={i} style={RP.progressBg}>
-                  <View style={[RP.progressFill, { width: i <= slideIndex ? "100%" : "0%" }]} />
-                </View>
-              ))}
-            </View>
-          )}
-
-          <View style={RP.header}>
-            <Avatar src={story.userProfile} username={story.username} size={28} />
-            <Text style={RP.username}>{story.username}</Text>
-            <TouchableOpacity onPress={onClose} style={RP.closeBtn}>
-              <FeatherIcon name="x" size={18} color="#fff" />
-            </TouchableOpacity>
-          </View>
-
-          <View style={RP.media}>
-            {isLiveSlide ? (
-              liveStatus === "live" && liveStream ? (
-                <RTCView streamURL={liveStream.toURL()} style={RP.mediaEl} objectFit="contain" />
-              ) : (
-                <View style={{ alignItems: "center", gap: 10 }}>
-                  {liveStatus === "denied" && (
-                    <>
-                      <Text style={{ fontSize: 32 }}>🔒</Text>
-                      <Text style={{ fontSize: 13, color: "rgba(255,255,255,0.7)" }}>Follow to watch</Text>
-                    </>
-                  )}
-                  {liveStatus === "ended" && (
-                    <>
-                      <Text style={{ fontSize: 32 }}>📺</Text>
-                      <Text style={{ fontSize: 13, color: "rgba(255,255,255,0.7)" }}>Live has ended</Text>
-                    </>
-                  )}
-                  {(liveStatus === "connecting" || !liveStatus) && (
-                    <Text style={{ fontSize: 13, color: "rgba(255,255,255,0.7)" }}>Connecting to live…</Text>
-                  )}
-                </View>
-              )
-            ) : slide.image ? (
-              isVideo ? (
-                <Video key={slide.image} source={{ uri: slide.image }} style={RP.mediaEl} resizeMode="contain" repeat muted />
-              ) : (
-                <Image source={{ uri: slide.image }} style={RP.mediaEl} resizeMode="contain" />
-              )
-            ) : (
-              <Text style={{ color: "rgba(255,255,255,0.5)", fontSize: 13 }}>No story to show</Text>
-            )}
-
-            {/* text overlays + mentions */}
-            {!isLiveSlide && (slide.textOverlays?.length > 0 || slide.mentions?.length > 0) && (
-              <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
-                {(slide.textOverlays || []).map((t, i) => (
-                  <View
-                    key={`text-${i}`}
-                    style={{ position: "absolute", left: `${t.x}%`, top: `${t.y}%`, transform: [{ translateX: -0.5 }, { translateY: -0.5 }], maxWidth: "80%" }}
-                  >
-                    <Text style={{ color: t.color || "#fff", fontSize: t.fontSize || 18, fontWeight: "700", textAlign: t.align || "center" }}>
-                      {t.text}
-                    </Text>
-                  </View>
-                ))}
-                {(slide.mentions || []).map((m, i) => (
-                  <TouchableOpacity
-                    key={`mention-${i}`}
-                    onPress={() => {
-                      if (!m.user) return;
-                      onClose();
-                      if (m.user?.toString() === currentUserId) {
-                        navigation.navigate("MainTabs", { screen: "Profile" });
-                      } else {
-                        navigation.navigate("UserProfile", { userId: m.user });
-                      }
-                    }}
-                    style={{ position: "absolute", left: `${m.x}%`, top: `${m.y}%`, backgroundColor: "rgba(255,255,255,0.92)", borderRadius: 18, paddingHorizontal: 9, paddingVertical: 4 }}
-                  >
-                    <Text style={{ color: "#111", fontSize: 11, fontWeight: "700" }}>@{m.username || "user"}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            )}
-
-            {/* repost attribution */}
-            {!isLiveSlide && slide.repostAttribution?.username && (
-              <TouchableOpacity
-                onPress={() => {
-                  if (!slide.repostAttribution.user) return;
-                  onClose();
-                  if (slide.repostAttribution.user?.toString() === currentUserId) {
-                    navigation.navigate("MainTabs", { screen: "Profile" });
-                  } else {
-                    navigation.navigate("UserProfile", { userId: slide.repostAttribution.user });
-                  }
-                }}
-                style={RP.repostBadge}
-              >
-                {slide.repostAttribution.profilePic ? (
-                  <Image source={{ uri: slide.repostAttribution.profilePic }} style={{ width: 15, height: 15, borderRadius: 8 }} />
-                ) : (
-                  <View style={{ width: 15, height: 15, borderRadius: 8, backgroundColor: "#1877f2", alignItems: "center", justifyContent: "center" }}>
-                    <Text style={{ color: "#fff", fontSize: 8, fontWeight: "700" }}>
-                      {slide.repostAttribution.username[0]?.toUpperCase()}
-                    </Text>
-                  </View>
-                )}
-                <Text style={{ color: "#fff", fontSize: 10, fontWeight: "600" }}>Story by @{slide.repostAttribution.username}</Text>
-              </TouchableOpacity>
-            )}
-
-            {slides.length > 1 && !isLiveSlide && (
-              <>
-                <TouchableOpacity style={RP.navLeft} activeOpacity={1} onPress={handlePrev} />
-                <TouchableOpacity style={RP.navRight} activeOpacity={1} onPress={handleNext} />
-              </>
-            )}
-
-            {liveComments.length > 0 && (
-              <View style={RP.commentsFeed} pointerEvents="none">
-                {liveComments.map((c, i) => (
-                  <View key={i} style={RP.commentBubble}>
-                    <Text style={RP.commentUser}>{c.username}</Text>
-                    <Text style={RP.commentText}>{c.text}</Text>
-                  </View>
-                ))}
-              </View>
-            )}
-          </View>
-
-          {isOwn ? (
-            <View style={RP.ownBar}>
-              <TouchableOpacity onPress={() => setShowViewers(true)} style={RP.statPill}>
-                <Text style={{ color: "#fff", fontSize: 13, fontWeight: "600" }}>{viewers.length} views</Text>
-              </TouchableOpacity>
-              <View style={RP.statPill}>
-                <Icon name="heart" solid size={13} color="#fff" />
-                <Text style={{ color: "#fff", fontSize: 13, fontWeight: "600" }}>{formatCount(likesCount)}</Text>
-              </View>
-              <View style={{ position: "relative", marginLeft: "auto" }}>
-                <TouchableOpacity ref={menu.anchorRef} onPress={menu.open} style={RP.iconBtn}>
-                  <Icon name="ellipsis-v" size={16} color="#fff" />
-                </TouchableOpacity>
-                {menu.visible && (
-                  <Modal transparent visible={menu.visible} animationType="fade" onRequestClose={menu.close}>
-                    <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={menu.close}>
-                      <View style={[RP.menu, { top: "auto", bottom: 34, right: 12, position: "absolute" }]}>
-                        <TouchableOpacity onPress={handleHideFromNonFollowers} style={RP.menuItem}>
-                          <Text style={{ fontSize: 14, fontWeight: "500", color: "#222" }}>
-                            {isHidden ? "Show to everyone" : "Hide from non-followers"}
-                          </Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity onPress={handleDelete} style={[RP.menuItem, { borderBottomWidth: 0 }]}>
-                          <Text style={{ fontSize: 14, fontWeight: "500", color: "#e53935" }}>Delete Story</Text>
-                        </TouchableOpacity>
-                      </View>
-                    </TouchableOpacity>
-                  </Modal>
-                )}
-              </View>
-            </View>
-          ) : (
-            <View style={RP.viewerBar}>
-              <TextInput
-                value={comment}
-                onChangeText={setComment}
-                onSubmitEditing={handleSendComment}
-                placeholder="Send message..."
-                placeholderTextColor="rgba(255,255,255,0.6)"
-                style={RP.input}
-              />
-              <TouchableOpacity onPress={handleLike} style={RP.iconBtn}>
-                <Icon name="heart" solid={liked} size={17} color={liked ? "#e53935" : "#fff"} />
-              </TouchableOpacity>
-              <TouchableOpacity onPress={handleSendComment} disabled={!comment.trim()} style={[RP.iconBtn, { opacity: comment.trim() ? 1 : 0.4 }]}>
-                <IonIcon name="paper-plane" size={16} color="#fff" />
-              </TouchableOpacity>
-            </View>
-          )}
-        </View>
-      </View>
-
-      {showViewers && (
-        <Modal visible transparent animationType="fade" onRequestClose={() => setShowViewers(false)}>
-          <TouchableOpacity style={RP.viewersOverlay} activeOpacity={1} onPress={() => setShowViewers(false)}>
-            <TouchableOpacity activeOpacity={1} style={RP.viewersBox}>
-              <View style={RP.viewersHandle} />
-              <Text style={RP.viewersHeader}>{viewers.length} viewers</Text>
-              <ScrollView style={{ flex: 1 }}>
-                {viewers.length === 0 ? (
-                  <Text style={{ textAlign: "center", color: "#aaa", paddingVertical: 20 }}>No viewers yet</Text>
-                ) : (
-                  viewers.map((v, i) => (
-                    <TouchableOpacity key={v._id ?? i} onPress={() => goToViewerProfile(v._id)} style={RP.viewerRow}>
-                      <Avatar src={v.profilePic} username={v.username} size={40} />
-                      <Text style={{ fontSize: 15, fontWeight: "600" }}>{v.username}</Text>
-                    </TouchableOpacity>
-                  ))
-                )}
-              </ScrollView>
-            </TouchableOpacity>
-          </TouchableOpacity>
-        </Modal>
-      )}
-    </Modal>
-  );
-}
-
 function BottomSheet({ onClose, title, children, inputBar, scrollable = true }) {
     const [ready, setReady] = useState(false);
   useEffect(() => {
@@ -1229,14 +720,10 @@ const isOwner = MY_ID === p?.author?._id?.toString() || MY_ID === p?.author?.toS
   const menu = useAnchoredMenu();
   const [flashPause, setFlashPause] = useState(false);
   const [showLikeBurst, setShowLikeBurst] = useState(false);
-  const [isBlocked, setIsBlocked] = useState(false);
-  const [isHidden, setIsHidden] = useState(p?.isHiddenFromNonFollowers || false);
   const [showLikers, setShowLikers] = useState(false);
   const [showComments, setShowComments] = useState(false);
   const [showShare, setShowShare] = useState(false);
   const [comments, setComments] = useState(p?.comments ?? []);
-  const [isNotInterested, setIsNotInterested] = useState(p?.isNotInterested || false);
-  const [removedFromView, setRemovedFromView] = useState(false);
 
   const [commentText, setCommentText] = useState("");
   const [likerSearch, setLikerSearch] = useState("");
@@ -1251,7 +738,6 @@ const isDownloadingRef = useRef(false);
   const [viewedByUsers, setViewedByUsers] = useState([]);
   const [showViews, setShowViews] = useState(false);
   const [viewerSearch, setViewerSearch] = useState("");
-  const hasRecordedView = useRef(false);
 
   // ── NEW: collaborator list sheet (mirrors likers/viewers sheets)
   const [showCollabList, setShowCollabList] = useState(false);
@@ -1303,11 +789,34 @@ const isDownloadingRef = useRef(false);
   const flashTimer = useRef(null);
 
   const username = p?.author?.username || "user";
+  // ── all ⋮-menu actions live in usePostOptions.js ──
+  const {
+    options: menuOptions,
+    handleMenuAction,
+    isHidden,
+    isNotInterested,
+    isBlocked,
+    removedFromView,
+    setRemovedFromView,
+    acceptedCollaborators,
+    myCollabEntry,
+  } = usePostOptions({
+    post: p,
+    isOwner,
+    authorId,
+    username,
+    noun: "video",
+    menu: menu,
+    currentUserId: MY_ID,
+    collaborators: collaborators,
+    onCollaboratorsChange: setCollaborators,
+    onBlock,
+    onDeleted,
+  });
+
   const profilePic = p?.author?.profilePic;
   const caption = p?.caption || p?.desc || "";
 
-  const acceptedCollaborators = (collaborators || []).filter((c) => c.status === "accepted");
-  const myCollabEntry = acceptedCollaborators.find((c) => (c.user?._id ?? c.user)?.toString() === MY_ID);
 
   // ── NEW: full collaborator roster (author + accepted collaborators),
   // used by the CollabListSheet — same shape as likedByUsers/viewedByUsers.
@@ -1498,16 +1007,9 @@ socket.on(`post:${p._id}:likes`, onLikes);
     }
   }, [isVisible]);
 
+  // Shared view recording (ViewStore) — counted once per session across every page.
   useEffect(() => {
-    if (!isVisible || !p?._id || hasRecordedView.current) return;
-    hasRecordedView.current = true;
-    (async () => {
-      try {
-        await apiFetch(`${API}/auth/views/posts/${p._id}/views`, { method: "POST"});
-      } catch (err) {
-        console.error("[record-view] failed:", err.message);
-      }
-    })();
+    if (isVisible && p?._id) recordPostView(p._id);
   }, [isVisible, p?._id]);
 
   // FIX: showCollabList wasn't included here before, so the navbar
@@ -1671,54 +1173,8 @@ socket.on(`post:${p._id}:likes`, onLikes);
     }
   };
 
-  const handleBlock = async () => {
-    if (isBlocked) return;
-    const ok = await confirmAsync(`Block ${username}?`);
-    if (!ok) return;
-    try {
-      const res = await apiFetch(`${API}/auth/block/${authorId}`, { method: "POST"});
-      const data = await res.json();
-      if (data.success) {
-        setIsBlocked(true);
-        menu.close();
-        onBlock?.(authorId?.toString());
-      }
-    } catch (err) {
-      console.error("[block-user] failed:", err.message);
-    }
-  };
 
-  const handleDelete = async () => {
-    const ok = await confirmAsync("Delete this video?");
-    if (!ok) return;
-    try {
-      const res = await apiFetch(`${API}/auth/delete-post/${p._id}`, { method: "DELETE"});
-      const data = await res.json();
-      if (res.ok) {
-        setRemovedFromView(true);
-        onDeleted?.(p._id);
-      } else {
-        Alert.alert("Error", data.message);
-      }
-    } catch (err) {
-      console.error("[delete-post] failed:", err.message);
-    }
-  };
 
-  const handleHideFromNonFollowers = async () => {
-    try {
-      const res = await apiFetch(`${API}/auth/hide-from-non-followers/${p._id}`, { method: "PATCH" });
-      const data = await res.json();
-      if (res.ok) {
-        setIsHidden(data.isHidden);
-        Alert.alert("", data.message);
-      } else {
-        Alert.alert("Error", data.message || "Something went wrong");
-      }
-    } catch (err) {
-      console.error("[hide-from-non-followers] failed:", err.message);
-    }
-  };
 
   const addComment = async () => {
     if (!commentText.trim() || !canComment) return;
@@ -1738,84 +1194,9 @@ socket.on(`post:${p._id}:likes`, onLikes);
     }
   };
 
-  const handleRemoveCollab = async (collabUser) => {
-    const isLeavingSelf = collabUser?._id?.toString() === MY_ID;
-    const confirmMsg = isLeavingSelf
-      ? "Remove yourself as a collaborator on this post? It will no longer show on your profile."
-      : `Remove ${collabUser?.username} as a collaborator? The post will no longer show on their profile.`;
-    const ok = await confirmAsync(confirmMsg);
-    if (!ok) return;
 
-    try {
-      const res = await apiFetch(`${API}/auth/remove-collaborator/${p._id}`, {
-        method: "PATCH",
-      
-        body: JSON.stringify({ userId: collabUser._id }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setCollaborators(data.collaborators ?? []);
-        menu.close();
-        if (isLeavingSelf && !isOwner) {
-          setRemovedFromView(true);
-          onDeleted?.(p._id);
-        }
-      }
-    } catch {}
-  };
 
-  const notInterested = async () => {
-    try {
-      const res = await apiFetch(`${API}/auth/not-interested/${p._id}`, { method: "PATCH" });
-      const data = await res.json();
-      if (data.success) {
-        setIsNotInterested((prev) => !prev);
-        Alert.alert("", data.message);
-      }
-    } catch (err) {
-      console.error("[toggle-not-interested] failed:", err.message);
-    }
-  };
 
-  const menuOptions = (() => {
-    const opts = [];
-    if (isOwner) {
-      opts.push({ key: "delete", label: "Delete", danger: true, action: handleDelete });
-      opts.push({
-        key: "hide",
-        label: isHidden ? "Show to everyone" : "Hide from non-followers",
-        action: handleHideFromNonFollowers,
-      });
-      acceptedCollaborators.forEach((c) => {
-        opts.push({
-          key: `remove-${c.user?._id}`,
-          label: `Remove collab: ${c.user?.username}`,
-          danger: true,
-          action: () => handleRemoveCollab(c.user),
-        });
-      });
-    } else if (isBlocked) {
-      opts.push({ key: "blocked", label: "Blocked", disabled: true, action: () => {} });
-    } else {
-      opts.push({ key: "interest", label: isNotInterested ? "Interested" : "Not Interested", action: notInterested });
-      opts.push({ key: "block", label: "Block", danger: true, action: handleBlock });
-      if (myCollabEntry) {
-        opts.push({
-          key: "leave-collab",
-          label: "Remove myself as collaborator",
-          danger: true,
-          action: () => handleRemoveCollab(myCollabEntry.user),
-        });
-      }
-    }
-    return opts;
-  })();
-
-  const handleMenuAction = (opt) => {
-    if (opt.disabled) return;
-    menu.close();
-    opt.action();
-  };
 
   const filteredLikers = likedByUsers.filter((u) => u.username?.toLowerCase().includes(likerSearch.toLowerCase()));
   const filteredViewers = viewedByUsers.filter((u) => u.username?.toLowerCase().includes(viewerSearch.toLowerCase()));
@@ -2170,7 +1551,7 @@ socket.on(`post:${p._id}:likes`, onLikes);
 
       {/* STORY PREVIEW */}
       {showStoryPreview && hasStory && (
-        <ReelStoryPreview story={story} onClose={() => setShowStoryPreview(false)} navigation={navigation} />
+        <FeedStoryPreview story={story} onClose={() => setShowStoryPreview(false)} navigation={navigation} />
       )}
     </>
   );

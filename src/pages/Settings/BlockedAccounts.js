@@ -5,6 +5,7 @@ import FeatherIcon from "react-native-vector-icons/Feather";
 import Config from "react-native-config";
 import { apiFetch } from "../../api/authToken"; // adjust relative path
 import { DmRowSkeleton } from "../../components/Skeleton/Skeleton";
+import { initBlockedStore, setBlocked } from "../../components/State/BlockStore";
 
 const API = Config.API_URL;
 
@@ -21,6 +22,7 @@ function BlockedAccounts() {
         const data = await res.json();
         if (data.success) {
           setBlockedUsers(data.blockedUsers);
+          initBlockedStore(data.blockedUsers);
         } else {
           console.error(data.message);
         }
@@ -40,6 +42,7 @@ function BlockedAccounts() {
       const data = await res.json();
       if (data.success) {
         setBlockedUsers((prev) => prev.filter((u) => u._id !== userId));
+        setBlocked(userId, false);
       } else {
         console.error(data.message);
       }
