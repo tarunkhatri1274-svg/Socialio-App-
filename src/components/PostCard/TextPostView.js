@@ -1205,8 +1205,9 @@ useEffect(() => {
     const oid = ownerId.toString();
     getCachedUser().then((currentUser) => {
       const currentUserId = (currentUser?._id || currentUser?.id)?.toString();
-      if (currentUserId && oid === currentUserId) {
-        navigation.navigate("Profile");
+if (currentUserId && oid === currentUserId) {
+  navigation.navigate("MainTabs", { screen: "Profile" });
+
       } else {
         navigation.navigate("UserProfile", { userId: oid });
       }

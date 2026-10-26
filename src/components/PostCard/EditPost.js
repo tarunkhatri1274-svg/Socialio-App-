@@ -35,10 +35,9 @@ import {
 import Slider from "@react-native-community/slider";
 import Svg, { Defs, RadialGradient, Stop, Rect, Circle } from "react-native-svg";
 import { ColorMatrix } from "react-native-color-matrix-image-filters";
-import ViewShot, { captureRef } from "react-native-view-shot";
-import ReactNativeBlobUtil from "react-native-blob-util";
+import ViewShot from "react-native-view-shot";
 import { useNavigation, useRoute } from "@react-navigation/native";
-import { parseCssFilterToMatrix, inspectImageFile, isUsableImage } from "./CropImage";
+import { parseCssFilterToMatrix } from "./CropImage";
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
 
@@ -269,7 +268,7 @@ useEffect(() => {
     try {
       const t0 = Date.now();
       const { uri } = await ImageResizer.createResizedImage(
-        images[i], 1440, 1440, "JPEG", 85, 0, undefined, false,
+        images[i], 1440, 1440, "JPEG", 95, 0, undefined, false,
         { mode: "contain", onlyScaleDown: true }
       );
       console.log(`EditPost: resized #${i} in ${Date.now() - t0}ms`);
@@ -329,67 +328,11 @@ useEffect(() => {
   // displayed (pan, zoom, aspect crop, and any ColorMatrix filter
   // preview all baked in together) and stashes the result. Safe to call
   // repeatedly — re-capturing an index just overwrites its entry.
-  const captureCurrentFrame = useCallback(async (index) => {
-    if (!frameShotRef.current) return null;
-    // Don't screenshot a frame whose image hasn't loaded yet.
-    // The fallback in AddImagePost.js handles a missing capture.
-    if (!loadedRef.current[index]) return null;
-    try {
-      // Let the freshly shown image paint before capturing.
-      await new Promise((r) => setTimeout(r, 120));
-
-      let uri = null;
-
-      // 1) Normal temp-file capture, but VERIFIED to be a real image — view-shot can
-      //    hand back a path to an empty file. Retried once: a capture taken right
-      //    after an edit can race the repaint.
-      for (let attempt = 1; attempt <= 2 && !uri; attempt++) {
-        const shot = await frameShotRef.current.capture();
-        const status = await inspectImageFile(shot);
-        console.log(`[CAPTURE] #${index} try ${attempt} ${shot} size=${status.size} decodes=${status.decodes}`);
-        if (isUsableImage(status)) uri = shot;
-        else await new Promise((r) => setTimeout(r, 300));
-      }
-
-      // 2) Still empty: ask view-shot for the pixels as base64 and write the file
-      //    ourselves, which skips view-shot's temp-file writing entirely.
-      if (!uri) {
-        const b64 = await captureRef(frameShotRef.current, {
-          format: "jpg",
-          quality: 0.92,
-          result: "base64",
-        });
-        console.log(`[CAPTURE] #${index} base64 length=${b64 ? b64.length : 0}`);
-        if (b64 && b64.length > 1000) {
-          const path = `${ReactNativeBlobUtil.fs.dirs.CacheDir}/edit-${Date.now()}-${index}.jpg`;
-          await ReactNativeBlobUtil.fs.writeFile(path, b64, "base64");
-          const status = await inspectImageFile(`file://${path}`);
-          console.log(`[CAPTURE] #${index} wrote ${path} size=${status.size} decodes=${status.decodes}`);
-          if (isUsableImage(status)) uri = `file://${path}`;
-        }
-      }
-
-      if (!uri) {
-        // Nothing usable: AddImagePost.js rebuilds this image from the source
-        // (crop + filter) via getEditedImage() instead.
-        console.warn("EditPost: frame capture produced an empty image for index", index);
-        return null;
-      }
-
-      setCapturedUris((prev) => {
-        const next = [...prev];
-        next[index] = uri;
-        return next;
-      });
-      return uri;
-    } catch (e) {
-      // Non-fatal: AddImagePost.js falls back to files[i]/images[i] +
-      // getEditedImage() for any index with no captured uri, same as
-      // before this change existed.
-      console.warn("EditPost: frame capture failed for index", index, e);
-      return null;
-    }
-  }, []);
+  // DISABLED on purpose. react-native-view-shot returns blank (all-black / all-white)
+  // or 0-byte images for this frame on this device, so screenshots can't be trusted.
+  // The final image is now drawn from the edit values instead (renderSpecs in
+  // handleNext + EditRender.js). Kept as a no-op so existing call sites stay valid.
+  const captureCurrentFrame = useCallback(async () => null, []);
 
   const handleBack = () => {
     if (onBack) return onBack();
@@ -399,15 +342,39 @@ useEffect(() => {
   const handleNext = async () => {
     const filterStrings = edits.map((e) => (isIdentityEdit(e) ? "" : buildFilter(e)));
 
-    // Capture whatever's currently on screen before navigating away —
-    // this covers the image the user was actively looking at when they
-    // tapped Next (the only one that might not already be in
-    // capturedUris from a filmstrip switch).
-    const finalCaptures = [...capturedUris];
-    const uri = await captureCurrentFrame(currentIndex);
-    // A failed/empty fresh capture must not leave an older, stale one in place:
-    // null makes AddImagePost.js rebuild this image from the current edits.
-    finalCaptures[currentIndex] = uri || null;
+    // One render recipe per image: the numbers the preview itself uses
+    // (frame size, pan, zoom, rotation, flip, filter). AddImagePost.js bakes
+    // these into the final JPEG with EditRender.js — no screenshot involved.
+    // An image with no recipe (never opened / working copy not ready) just
+    // falls back to the plain crop path, which is correct for default edits.
+    const frameW = frameSize.width;
+    const renderSpecs = images.map((_, i) => {
+      const ed = edits[i];
+      const size = naturalSizes[i];
+      const workUri = workingUris[i];
+      if (!frameW || !ed || !size || !workUri) return undefined;
+      const ratio = ASPECTS.find((a) => a.key === ed.aspect)?.ratio || naturalRatios[i];
+      const identity =
+        isIdentityEdit(ed) &&
+        ed.offsetX === 0 &&
+        ed.offsetY === 0 &&
+        ed.zoom === 1 &&
+        ed.rotation === 0 &&
+        !ed.flip &&
+        ed.aspect === "orig";
+      return {
+        uri: workUri,
+        frameW,
+        frameH: frameW / ratio,
+        tx: ed.offsetX,
+        ty: ed.offsetY,
+        zoom: ed.zoom,
+        rotation: ed.rotation,
+        flip: ed.flip,
+        filter: isIdentityEdit(ed) ? "" : buildFilter(ed),
+        trivial: identity, // nothing to bake: upload the working copy as-is
+      };
+    });
 
     // Kept as a fallback for any image whose capture failed (e.g. the
     // frame never actually laid out) — AddImagePost.js already knows
@@ -429,7 +396,8 @@ useEffect(() => {
       edits,
       filters: filterStrings,
       crops,
-      capturedUris: finalCaptures,
+      capturedUris: images.map(() => null), // screenshots disabled (see captureCurrentFrame)
+      renderSpecs,
     };
     if (onNext) return onNext(payload);
     if (navigation) return navigation.navigate("CreateImagePost", payload);
@@ -604,7 +572,7 @@ useEffect(() => {
   <ActivityIndicator color="#2FD9C4" size="small" />
 </View>
           ) : previewMatrix ? (
-            <ColorMatrix matrix={previewMatrix}>
+            <ColorMatrix matrix={previewMatrix} style={styles.filterWrap}>
               <Image
                 source={{ uri: displayUris[currentIndex] }}
                 onLoad={(e) => {
@@ -941,6 +909,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#111",
   },
   frameImage: { width: "100%", height: "100%" },
+  filterWrap: { width: "100%", height: "100%" },
   resizingFrame: { width: "100%", height: "100%", alignItems: "center", justifyContent: "center", backgroundColor: "#111" },
   grid: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0 },
   gridLineV: { position: "absolute", top: 0, bottom: 0, width: 1, backgroundColor: "rgba(255,255,255,0.35)" },

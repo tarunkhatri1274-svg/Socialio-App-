@@ -36,6 +36,7 @@ import CommentSection from "./CommentSection";
 import { useFollowStore } from "../../pages/Profile/UseFollowState";
 import { isPostSaved, toggleSavedPost, subscribeSavedPosts } from "../State/SavedPostStore";
 import { carouselTouchProps } from "../../components/carouselTouch";
+import { useCarouselHeight } from "./PostImage";
 const API = Config.API_URL;
 const SCREEN_WIDTH = Dimensions.get("window").width;
 const SCREEN_HEIGHT = Dimensions.get("window").height;
@@ -394,6 +395,8 @@ function MediaCarousel({ media, onDoubleTapLike, onIndexChange }) {
     onIndexChange?.(next);
   };
 
+  const boxH = useCarouselHeight(media, SCREEN_WIDTH, 460);
+
   if (total === 0) return null;
   const item = media[current];
 
@@ -414,14 +417,14 @@ function MediaCarousel({ media, onDoubleTapLike, onIndexChange }) {
       <Video
         key={i}
         source={{ uri: m.url }}
-        style={{ width: SCREEN_WIDTH, height: 460 }}
+        style={{ width: SCREEN_WIDTH, height: boxH }}
         resizeMode="contain"
         controls
         paused={i !== current}
       />
     ) : (
       <TouchableOpacity key={i} activeOpacity={1} onPress={handleTap}>
-        <Image source={{ uri: m.url }} style={{ width: SCREEN_WIDTH, height: 460 }} resizeMode="cover" />
+        <Image source={{ uri: m.url }} style={{ width: SCREEN_WIDTH, height: boxH, backgroundColor: "#000" }} resizeMode="contain" />
       </TouchableOpacity>
     )
   )}
@@ -1317,8 +1320,9 @@ function Post() {
       return;
     }
     const oid = ownerId.toString();
-    if (currentUserId && oid === currentUserId.toString()) {
-      navigation.navigate("Profile");
+   if (currentUserId && oid === currentUserId.toString()) {
+  navigation.navigate("MainTabs", { screen: "Profile" });
+
     } else {
       navigation.navigate("UserProfile", { userId: oid });
     }

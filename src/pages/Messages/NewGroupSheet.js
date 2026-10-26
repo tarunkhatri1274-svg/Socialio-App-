@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import {
   View,
   Text,
@@ -13,7 +13,7 @@ import {
 import Svg, { Circle, Line } from "react-native-svg";
 import Config from "react-native-config";
 import { apiFetch as authApiFetch } from "../../api/authToken";
-
+import { useBlockedIds } from "../../components/State/BlockStore";
 const API = Config.API_URL;
 const GOLDEN = "rgb(234,182,118)";
 
@@ -70,7 +70,11 @@ export default function NewGroupSheet({ onClose, onCreated }) {
   const [groupName, setGroupName] = useState("");
   const [creating, setCreating] = useState(false);
   const timer = useRef(null);
-
+const blockedIds = useBlockedIds();
+const visibleResults = useMemo(
+  () => results.filter((u) => !blockedIds.has(String(u._id))),
+  [results, blockedIds]
+);
   useEffect(() => {
     clearTimeout(timer.current);
     setSearching(true);
@@ -99,7 +103,10 @@ export default function NewGroupSheet({ onClose, onCreated }) {
       const data = await apiFetch(`${API}/groups/create`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: groupName.trim(), memberIds: Array.from(selected.keys()) }),
+       body: JSON.stringify({
+  name: groupName.trim(),
+  memberIds: Array.from(selected.keys()).filter((id) => !blockedIds.has(String(id))),
+}),
       });
 
       // FIX: previously, if the server responded with HTTP 200 but
@@ -164,10 +171,10 @@ export default function NewGroupSheet({ onClose, onCreated }) {
 
               <ScrollView style={s.list}>
                 {searching && <Text style={s.hint}>Searching…</Text>}
-                {!searching && results.length === 0 && (
+               {!searching && visibleResults.length === 0 && (
                   <Text style={s.hint}>{search ? "No users found." : "Start typing to find people."}</Text>
                 )}
-                {!searching && results.map((u) => (
+                 {!searching && visibleResults.map((u) => (
                   <TouchableOpacity key={u._id} style={s.userRow} onPress={() => toggle(u)}>
                     <Avatar user={u} size={44} />
                     <View style={{ flex: 1, marginLeft: 12 }}>

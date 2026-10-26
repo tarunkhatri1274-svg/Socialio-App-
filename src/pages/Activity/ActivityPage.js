@@ -562,19 +562,20 @@ function ActivityPage() {
   // gesture first.
   const { panHandlers, screenStyle } = useSwipeToChangeTab({ capture: false, animateScreen: true });
 
-  const loadPage = useCallback(async (pageNum) => {
-    try {
-      const data = await fetchNotifications(pageNum);
-      setNotifications((prev) => (pageNum === 1 ? data.notifications : [...prev, ...data.notifications]));
-      setHasMore(data.hasMore);
-      setPage(pageNum);
-      setError(null);
-    } catch (err) {
-      setError("Failed to load notifications.");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+const loadPage = useCallback(async (pageNum) => {
+  try {
+    const data = await fetchNotifications(pageNum);
+    const list = (data.notifications || []).filter((n) => n.type !== "message");
+    setNotifications((prev) => (pageNum === 1 ? list : [...prev, ...list]));
+    setHasMore(data.hasMore);
+    setPage(pageNum);
+    setError(null);
+  } catch (err) {
+    setError("Failed to load notifications.");
+  } finally {
+    setLoading(false);
+  }
+}, []);
 const { refreshing, onRefresh } = useRefresh(() => loadPage(1));
   useEffect(() => {
     (async () => {
@@ -615,6 +616,7 @@ useEffect(() => {
     // when it enters state, fixes it at the source instead of papering
     // over it in the list itself.
 const handleNewNotification = (notif) => {
+  if (notif?.type === "message") return;
   const withId = notif?._id ? notif : { ...notif, _id: `temp-${Date.now()}-${Math.random().toString(36).slice(2)}` };
   // ← NEW — skip if this notification is already in the list (e.g. it
   // arrived over the socket AND was fetched on load), so no duplicate cards.

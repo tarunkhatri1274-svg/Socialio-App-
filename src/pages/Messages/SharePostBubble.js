@@ -14,7 +14,8 @@ import Video from "react-native-video";
 import Svg, { Path, Circle, Polyline, Polygon } from "react-native-svg";
 import Config from "react-native-config";
 import { apiFetch as authApiFetch } from "../../api/authToken";
-
+import { useBlockedIds } from "../../components/State/BlockStore";
+import { recordPostView } from "../../components/State/ViewStore";
 const API = Config.API_URL;
 const GOLDEN = "rgb(234,182,118)";
 
@@ -77,7 +78,10 @@ export function getShareCaption(msg, fromMe, otherUsername) {
  */
 function PostViewerOverlay({ post, onClose }) {
   const [index, setIndex] = useState(0);
-
+useEffect(() => {
+  const m = Array.isArray(post?.media) ? post.media[0] : null;
+  if (post?._id && (m?.type === "video" || post?.mediaType === "video")) recordPostView(post._id);
+}, [post?._id]);
   if (!post) return null;
 
   const mediaList = Array.isArray(post.media) && post.media.length > 0
@@ -204,7 +208,7 @@ export function SharedPostBubble({ sharedPost, fromMe, isMentionMessage }) {
 
   const [reposting, setReposting] = useState(false);
   const [reposted, setReposted] = useState(false);
-
+const blockedIds = useBlockedIds();
   const isStory = sharedPost?.kind === "story";
   const canAddToStory = isMentionMessage && isStory && !fromMe && storyStatus !== "expired" && storyStatus !== "denied";
 
@@ -327,7 +331,18 @@ export function SharedPostBubble({ sharedPost, fromMe, isMentionMessage }) {
       setReposting(false);
     }
   };
-
+if (sharedPost.authorId && blockedIds.has(String(sharedPost.authorId))) {
+  return (
+    <View style={[s.card, { backgroundColor: fromMe ? "rgba(255,255,255,0.1)" : "#f0f2f5", opacity: 0.7 }]}>
+      <View style={s.expiredRow}>
+        <Text style={{ fontSize: 18 }}>🚫</Text>
+        <Text style={{ fontSize: 13, fontWeight: "600", color: fromMe ? "#fff" : "#111" }}>
+          Content unavailable
+        </Text>
+      </View>
+    </View>
+  );
+}
   // ── expired story ───────────────────────────────────────────────────
   if (isStory && storyStatus === "expired") {
     return (
@@ -479,9 +494,11 @@ export function ForwardModal({ msg, currentUser, onClose }) {
   const [selectedGroups, setSelectedGroups] = useState(new Set());
   const [sending, setSending] = useState(false);
   const timer = useRef(null);
-
+const blockedIds = useBlockedIds();
   const isSearchMode = search.trim().length > 0;
-  const peopleList = isSearchMode ? searchResults : recentUsers;
+ const peopleList = (isSearchMode ? searchResults : recentUsers).filter(
+  (u) => !blockedIds.has(String(u._id))
+);
 
   useEffect(() => {
     apiFetch(`${API}/messages/recent-users`)

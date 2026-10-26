@@ -20,6 +20,7 @@ import {
   Animated,
   RefreshControl
 } from "react-native";
+import { useBlockedIds, subscribeBlocked, loadBlockedStore } from "../../components/State/BlockStore";
 import Video from "react-native-video";
 import ReactNativeBlobUtil from "react-native-blob-util";
 import { fetchWallpaper, saveWallpaper, uploadWallpaperPhoto, clearWallpaperOnServer } from "./WallpaperAPI"; // adjust path to where you place the file
@@ -398,9 +399,6 @@ const MIME_TYPES = {
 
 async function downloadFileToDevice(url, fileName) {
   try {
-    
-    // Only Android 9 and below needs the storage permission.
-    // Android 10+ saves through MediaStore, which needs no permission.
     if (Platform.OS === "android" && Platform.Version <= 28) {
       const granted = await PermissionsAndroid.request(
         PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE,
@@ -417,30 +415,41 @@ async function downloadFileToDevice(url, fileName) {
     const mime = MIME_TYPES[ext] || "application/octet-stream";
     const { dirs } = ReactNativeBlobUtil.fs;
 
-    // 1) Download into the app's own cache (always writable)
+    // 1) Download into the app cache
     const tmpPath = `${dirs.CacheDir}/${Date.now()}_${safeName}`;
     const res = await ReactNativeBlobUtil.config({ fileCache: true, path: tmpPath }).fetch("GET", url);
     const status = res.info().status;
     if (status < 200 || status >= 300) throw new Error(`Server returned ${status}`);
 
-    // 2) Copy into the public Downloads folder
     if (Platform.OS === "android") {
-      if (ReactNativeBlobUtil.MediaCollection?.copyToMediaStore) {
-        await ReactNativeBlobUtil.MediaCollection.copyToMediaStore(
-          { name: safeName, parentFolder: "", mimeType: mime },
-          "Download",
-          tmpPath
-        );
-      } else {
-        // fallback for older react-native-blob-util versions
-        const dest = `${dirs.DownloadDir}/${safeName}`;
-        await ReactNativeBlobUtil.fs.cp(tmpPath, dest);
-        await ReactNativeBlobUtil.android.addCompleteDownload({
-          title: safeName, description: "Downloaded", mime, path: dest, showNotification: true,
-        });
+      // 2) Save a copy into public Downloads
+      try {
+        if (ReactNativeBlobUtil.MediaCollection?.copyToMediaStore) {
+          await ReactNativeBlobUtil.MediaCollection.copyToMediaStore(
+            { name: safeName, parentFolder: "", mimeType: mime },
+            "Download",
+            tmpPath
+          );
+        } else {
+          const dest = `${dirs.DownloadDir}/${safeName}`;
+          await ReactNativeBlobUtil.fs.cp(tmpPath, dest);
+          await ReactNativeBlobUtil.android.addCompleteDownload({
+            title: safeName, description: "Downloaded", mime, path: dest, showNotification: true,
+          });
+        }
+        ToastAndroid.show("Saved to Downloads", ToastAndroid.SHORT);
+      } catch (e) {
+        console.log("[download] save to Downloads failed:", e);
       }
-      ReactNativeBlobUtil.fs.unlink(tmpPath).catch(() => {});
-      Alert.alert("Saved", `${safeName} saved to Downloads.`);
+
+      // 3) Open with the device's app chooser (Drive PDF viewer, etc.)
+      try {
+        await ReactNativeBlobUtil.android.actionViewIntent(tmpPath, mime);
+      } catch (e) {
+        Alert.alert("No app found", "File was saved to Downloads, but no installed app can open this file type.");
+      }
+      // Don't unlink tmpPath here: the viewer app is still reading it.
+      // Android clears the cache folder on its own.
     } else {
       ReactNativeBlobUtil.ios.previewDocument(tmpPath);
     }
@@ -1287,7 +1296,19 @@ function ChatWindow({ conversation, currentUser, onClose, onlineUsers, onRequest
       Alert.alert("Couldn't set wallpaper", "Please try again.");
     }
   };
-
+useEffect(() => {
+  if (!otherUser?._id) return;
+  let cancelled = false;
+  (async () => {
+    try {
+      const d = await apiFetch(`${API}/messages/mute/${otherUser._id}`);
+      if (!cancelled) setMuted(!!d.muted);
+    } catch (err) {
+      console.log("[Mute] load failed:", err.message);
+    }
+  })();
+  return () => { cancelled = true; };
+}, [otherUser?._id]);
   useEffect(() => {
     setLoading(true);
     apiFetch(`${API}/messages/chat/${chatId}`).then(data => {
@@ -1410,7 +1431,21 @@ function ChatWindow({ conversation, currentUser, onClose, onlineUsers, onRequest
       onClose();
     } catch (err) { console.error(err); }
   };
-
+const handleToggleMute = async () => {
+  const next = !muted;
+  setMuted(next);
+  setShowMenu(false);
+  try {
+    await apiFetch(`${API}/messages/mute/${otherUser?._id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ muted: next }),
+    });
+  } catch (err) {
+    setMuted(!next); // roll back if the server call failed
+    Alert.alert("Couldn't update mute", "Please try again.");
+  }
+};
   const handleClearChat = () => {
     Alert.alert("Clear chat", "Clear chat for yourself only?", [
       { text: "Cancel", style: "cancel" },
@@ -1458,9 +1493,9 @@ function ChatWindow({ conversation, currentUser, onClose, onlineUsers, onRequest
               {showMenu && (
                 <View style={s.dropMenu}>
                   <TouchableOpacity style={s.dropItem} onPress={handleClearChat}><Text>🗑️ Clear Chat</Text></TouchableOpacity>
-                  <TouchableOpacity style={s.dropItem} onPress={() => { setMuted(m => !m); setShowMenu(false); }}>
-                    <Text>{muted ? "🔔 Unmute" : "🔕 Mute"}</Text>
-                  </TouchableOpacity>
+<TouchableOpacity style={s.dropItem} onPress={handleToggleMute}>
+  <Text>{muted ? "🔔 Unmute" : "🔕 Mute"}</Text>
+</TouchableOpacity>
                   <TouchableOpacity style={s.dropItem} onPress={() => { setShowWallpaper(true); setShowMenu(false); }}>
                     <Text>🖼️ Wallpaper</Text>
                   </TouchableOpacity>
@@ -1616,7 +1651,8 @@ function NewChatSheet({ onClose, onSelectUser }) {
   const [results, setResults] = useState([]);
   const [searching, setSearching] = useState(false);
   const timer = useRef(null);
-
+const blockedIds = useBlockedIds();
+const visibleResults = results.filter((u) => !blockedIds.has(String(u._id)));
   useEffect(() => {
     clearTimeout(timer.current);
     if (!search.trim()) { setResults([]); return; }
@@ -1645,8 +1681,8 @@ function NewChatSheet({ onClose, onSelectUser }) {
           </View>
           <ScrollView style={s.forwardUserList}>
             {searching && <Text style={s.loadingText}>Searching…</Text>}
-            {!searching && search.trim() && results.length === 0 && <Text style={s.loadingText}>No users found for "{search}"</Text>}
-            {!searching && results.map(user => (
+            {!searching && search.trim() && visibleResults.length === 0 && <Text style={s.loadingText}>No users found for "{search}"</Text>}
+            {!searching && visibleResults.map(user => (
               <TouchableOpacity key={user._id} style={s.forwardUserItem} onPress={() => onSelectUser(user)}>
                 <Avatar user={user} size={44} />
                 <View style={{ flex: 1, marginLeft: 12 }}>
@@ -1688,6 +1724,8 @@ function Messages() {
   const [requests, setRequests] = useState([]);
   const [groupRequests, setGroupRequests] = useState([]);
   const [search, setSearch] = useState("");
+  const blockedIds = useBlockedIds();
+useEffect(() => { loadBlockedStore(); }, []);
   const [openConv, setOpenConv] = useState(null);
   const [onlineUsers, setOnlineUsers] = useState([]);
   const [showComposeMenu, setShowComposeMenu] = useState(false);
@@ -1761,7 +1799,13 @@ function Messages() {
       if (data.success) { setGroupRequests(data.requests); setGroupRequestCount(data.requests.length); }
     } catch (err) { console.error(err); }
   }, []);
-
+useEffect(
+  () =>
+    subscribeBlocked((id, isBlocked) => {
+      if (id && !isBlocked) { loadInbox(); loadRequests(); }
+    }),
+  [loadInbox, loadRequests]
+);
   useEffect(() => {
     if (!currentUser?._id) return;
     socket.emit("register", currentUser._id);
@@ -1779,35 +1823,45 @@ function Messages() {
     const playPing = (title = "Socialio", body = "You have a new message") =>
       playAlertSound({ title, body });
 
-    const onNewMessage = (data) => {
-      const currentlyOpenChatId = openConv?._id;
-      if (data?.conversationId !== currentlyOpenChatId && notifSettings && notifSettings.message !== false) {
-        playPing(
-          data?.message?.user?.username ? `Message from ${data.message.user.username}` : "New message",
-          data?.text || "You received a new message"
-        );
-      }
-      loadInbox();
-    };
-    const onNewRequest = () => {
-      if (notifSettings && notifSettings.message !== false) playPing("New message request", "You received a new message request");
-      loadRequests();
-    };
+const onNewMessage = (data) => {
+  const currentlyOpenChatId = openConv?._id;
+  if (
+    !data?.muted &&
+    data?.conversationId !== currentlyOpenChatId &&
+    notifSettings && notifSettings.message !== false
+  ) {
+    playPing(
+      data?.message?.user?.username ? `Message from ${data.message.user.username}` : "New message",
+      data?.text || "You received a new message"
+    );
+  }
+  loadInbox();
+};
+const onNewRequest = (data) => {
+  if (!data?.muted && notifSettings && notifSettings.message !== false) {
+    playPing("New message request", "You received a new message request");
+  }
+  loadRequests();
+};
     const onRequestAccepted = () => loadInbox();
     const onGroupInvite = () => {
       if (notifSettings && notifSettings.message !== false) playPing("Group invite", "You were invited to a group");
       loadGroupRequests();
     };
-    const onGroupMessage = (data) => {
-      const currentlyOpenChatId = openConv?._id;
-      if (data?.chatId !== currentlyOpenChatId && notifSettings && notifSettings.message !== false) {
-        playPing(
-          data?.message?.user?.username ? `${data.message.user.username} (group)` : "New group message",
-          data?.text || "You received a new group message"
-        );
-      }
-      loadGroups();
-    };
+const onGroupMessage = (data) => {
+  const currentlyOpenChatId = openConv?._id;
+  if (
+    !data?.muted &&
+    data?.chatId !== currentlyOpenChatId &&
+    notifSettings && notifSettings.message !== false
+  ) {
+    playPing(
+      data?.message?.user?.username ? `${data.message.user.username} (group)` : "New group message",
+      data?.text || "You received a new group message"
+    );
+  }
+  loadGroups();
+};
     const onGroupMemberJoined = () => loadGroups();
     const onGroupMemberLeft = () => loadGroups();
     const onRemovedFromGroup = () => loadGroups();
@@ -1862,10 +1916,12 @@ useEffect(() => {
 
   const isOnline = userId => onlineUsers.includes(userId?.toString());
 
-  const mergedInbox = [
-    ...conversations.map(c => ({ ...c, isGroup: false })),
-    ...groups.map(g => ({ ...g, isGroup: true })),
-  ].sort((a, b) => new Date(b.lastMessageAt || 0) - new Date(a.lastMessageAt || 0));
+const mergedInbox = [
+  ...conversations
+    .filter((c) => !blockedIds.has(String(c.otherUser?._id)))
+    .map((c) => ({ ...c, isGroup: false })),
+  ...groups.map((g) => ({ ...g, isGroup: true })),
+].sort((a, b) => new Date(b.lastMessageAt || 0) - new Date(a.lastMessageAt || 0));
 
   const filteredConvos = mergedInbox.filter(c => {
     const name = c.isGroup ? c.name : c.otherUser?.username;
@@ -2083,7 +2139,7 @@ const closeGroupChat = async () => {
             ))}
 
             {requests.length > 0 && <Text style={s.sectionLabel}>Messages</Text>}
-            {requests.map(req => {
+            {requests.filter((r) => !blockedIds.has(String(r.initiator?._id))).map(req => {
               const user = req.initiator;
               return (
                 <TouchableOpacity key={req.chatId} style={s.dmItem} onPress={() => openRequest(req)}>

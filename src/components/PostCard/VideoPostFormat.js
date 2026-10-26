@@ -89,14 +89,32 @@ function CreateVideoPost() {
   const [disableDownload, setDisableDownload] = useState(false);
   const [disableComments, setDisableComments] = useState(false);
 
+  // Top bar with a back arrow — returns to the previous screen (the video
+  // picker / profile), shown in every state of this screen.
+  const topBar = (
+    <View style={styles.topBar}>
+      <TouchableOpacity
+        onPress={() => navigation.goBack()}
+        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+      >
+        <FeatherIcon name="arrow-left" size={22} color="#111" />
+      </TouchableOpacity>
+      <Text style={styles.topBarTitle}>New Video</Text>
+      <View style={{ width: 22 }} />
+    </View>
+  );
+
   // if no video selected
   if (!state?.file) {
     return (
-      <View style={styles.errorContainer}>
-        <Text style={{ fontSize: 18, fontWeight: "700" }}>No video selected</Text>
-        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.navigate("MainTabs", { screen: "Profile" })}>
-          <Text style={{ color: "#fff" }}>Go Back</Text>
-        </TouchableOpacity>
+      <View style={{ flex: 1, backgroundColor: "#f4f4f4" }}>
+        {topBar}
+        <View style={styles.errorContainer}>
+          <Text style={{ fontSize: 18, fontWeight: "700" }}>No video selected</Text>
+          <TouchableOpacity style={styles.backBtn} onPress={() => navigation.navigate("MainTabs", { screen: "Profile" })}>
+            <Text style={{ color: "#fff" }}>Go Back</Text>
+          </TouchableOpacity>
+        </View>
       </View>
     );
   }
@@ -238,6 +256,8 @@ function CreateVideoPost() {
   };
 
   return (
+    <View style={{ flex: 1, backgroundColor: "#f4f4f4" }}>
+    {topBar}
     <ScrollView style={styles.wrapper} contentContainerStyle={{ alignItems: "center", padding: 15 }}>
       <View style={styles.card}>
         {/* VIDEO PREVIEW */}
@@ -392,12 +412,24 @@ function CreateVideoPost() {
         </TouchableOpacity>
       </View>
     </ScrollView>
+    </View>
   );
 }
 
 export default CreateVideoPost;
 
 const styles = StyleSheet.create({
+  topBar: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 12,
+    paddingHorizontal: 15,
+    backgroundColor: "#fff",
+    borderBottomWidth: 1,
+    borderBottomColor: "#eee",
+  },
+  topBarTitle: { fontSize: 16, fontWeight: "700", color: "#111" },
   wrapper: { flex: 1, backgroundColor: "#f4f4f4" },
   card: { width: "100%", maxWidth: 380, backgroundColor: "#fff", borderRadius: 16, padding: 15 },
   preview: { width: "100%", height: 350, borderRadius: 12, backgroundColor: "#000" },

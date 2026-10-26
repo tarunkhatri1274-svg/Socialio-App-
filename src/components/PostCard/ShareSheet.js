@@ -47,7 +47,7 @@ function Avatar({ src, username, size = 42 }) {
 }
 
 export default function ShareSheet({ postId, post, onClose }) {
-  console.log('[SHARESHEET] component is rendering, postId =', postId);
+ 
   const [users, setUsers] = useState([]);
   const [recent, setRecent] = useState([]);
 
@@ -148,30 +148,33 @@ onPanResponderRelease: (_, g) => {
   const totalSelected = selected.size + selectedGroups.size;
 
   // ── Send ──────────────────────────────────────────────────────────────────
-  const handleSend = async () => {
-    if (totalSelected === 0 || sending) return;
-    setSending(true);
-    try {
-      const res = await fetch(`${API}/auth/share`, {
-        method: "POST",
-      
-        body: JSON.stringify({
-          postId,
-          toUserIds: [...selected],
-          toGroupChatIds: [...selectedGroups],
-        }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setSent(true);
-        setTimeout(onClose, 900);
-      }
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setSending(false);
+const handleSend = async () => {
+  if (totalSelected === 0 || sending) return;
+  setSending(true);
+  try {
+    const res = await apiFetch(`${API}/auth/share`, {
+      method: "POST",
+      body: JSON.stringify({
+        postId,
+        toUserIds: [...selected],
+        toGroupChatIds: [...selectedGroups],
+      }),
+    });
+    const data = await res.json();
+    console.log("[ShareSheet] send result:", res.status, data); // temporary, remove later
+    if (data.success) {
+      setSent(true);
+      setTimeout(onClose, 900);
+    } else {
+      Alert.alert("Couldn't share", data.message || "Please try again");
     }
-  };
+  } catch (e) {
+    console.error(e);
+    Alert.alert("Couldn't share", "Network error");
+  } finally {
+    setSending(false);
+  }
+};
 
   const handleCopyLink = () => {
     // window.location.href has no RN equivalent — falls back to the

@@ -3,6 +3,7 @@ import { View, Image, StyleSheet } from "react-native";
 import ImageEditor from "@react-native-community/image-editor";
 import ViewShot from "react-native-view-shot";
 import ReactNativeBlobUtil from "react-native-blob-util";
+import { renderEditedImage } from "./EditRender";
 import {
   ColorMatrix,
   concatColorMatrices,
@@ -219,6 +220,18 @@ export default async function getEditedImage(imageSrc, crop, filter) {
     // (e.g. only blur()/opacity()) — fall back to the unfiltered crop
     // rather than failing the whole post.
     return { uri: croppedUri, type: "image/jpeg", name: `edited-${Date.now()}.jpg` };
+  }
+
+  // Preferred: apply the filter in plain JS (no screenshot, and no
+  // <FilterCaptureHost/> needed). View screenshots come back blank on this device.
+  try {
+    const f = await renderEditedImage(
+      { uri: croppedUri, frameW: cropRect.width, frameH: cropRect.height, tx: 0, ty: 0, zoom: 1, rotation: 0, flip: false },
+      matrix
+    );
+    return { uri: f.uri, type: f.type, name: f.name };
+  } catch (err) {
+    console.warn("getEditedImage: JS filter failed, trying the ViewShot capture instead:", err?.message);
   }
 
   if (!_captureFilter) {

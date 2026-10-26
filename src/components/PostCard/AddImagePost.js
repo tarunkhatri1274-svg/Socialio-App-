@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import {
   View,
   Text,
@@ -24,7 +24,9 @@ import ReactNativeBlobUtil from "react-native-blob-util";
 // Keeping the same call contract here — pass in the source uri + this
 // item's crop rect + filter name, get back { uri, type, name } ready to
 // drop straight into FormData below.
-import getEditedImage, { inspectImageFile, isUsableImage } from "./CropImage";
+import getEditedImage, { inspectImageFile, isUsableImage, parseCssFilterToMatrix } from "./CropImage";
+import { renderEditedImage, SKIA_AVAILABLE } from "./EditRender";
+import { useImageAspect, clampRatio } from "./PostImage";
 
 const API = Config.API_URL;
 // Client-side size guard — this upload path enforces MAX_IMAGE_BYTES using
@@ -126,6 +128,62 @@ function CreateImagePost() {
   // upload directly — no need to re-derive a crop rect or re-apply a
   // filter, since the capture already IS the final edited image.
   const capturedUris = state?.capturedUris || [];
+
+  // ← Edited photos are drawn from EditPost's numbers (crop/zoom/rotate/flip/filter)
+  // by EditRender.js — view screenshots come back blank on this device. Rendering
+  // starts as soon as this screen opens, so it's usually finished by the time the
+  // user taps Post; handlePost just awaits the same job.
+  const renderSpecs = state?.renderSpecs || [];
+  const [renderedUris, setRenderedUris] = useState({});
+  // per image: { state: "busy" | "done" | "failed" | "trivial", msg } — shown as a pill on the preview
+  const [renderStatus, setRenderStatus] = useState({});
+  const renderErrors = useRef({});
+  const renderJobs = useRef({});
+  const getRendered = useCallback((i) => {
+    const spec = renderSpecs[i];
+    if (!spec) return Promise.resolve(null);
+    if (!renderJobs.current[i]) {
+      renderJobs.current[i] = (async () => {
+        try {
+          // Nothing to bake (original framing, no filter): use the working copy as-is.
+          if (spec.trivial) {
+            const same = { uri: spec.uri, type: "image/jpeg", name: `edited-${i}.jpg` };
+            setRenderedUris((p) => ({ ...p, [i]: same.uri }));
+            setRenderStatus((p) => ({ ...p, [i]: { state: "trivial" } }));
+            return same;
+          }
+          setRenderStatus((p) => ({ ...p, [i]: { state: "busy" } }));
+          const matrix = parseCssFilterToMatrix(spec.filter);
+          console.log(
+            `[RENDER] #${i} start filter="${spec.filter}" matrix=${matrix ? "yes" : "NONE"} ` +
+              `frame=${Math.round(spec.frameW)}x${Math.round(spec.frameH)} zoom=${spec.zoom} rot=${spec.rotation} flip=${spec.flip} ` +
+              `pan=${Math.round(spec.tx)},${Math.round(spec.ty)}`
+          );
+          const file = await renderEditedImage(spec, matrix);
+          setRenderedUris((p) => ({ ...p, [i]: file.uri }));
+          setRenderStatus((p) => ({ ...p, [i]: { state: "done", msg: `${file.width}x${file.height} · ${file.engine} ${((file.ms || 0) / 1000).toFixed(1)}s` } }));
+          return file;
+        } catch (e) {
+          const msg = e?.message || String(e);
+          console.log(`[RENDER] #${i} failed:`, msg);
+          renderErrors.current[i] = msg;
+          setRenderStatus((p) => ({ ...p, [i]: { state: "failed", msg } }));
+          return null; // handlePost asks before falling back to the older crop path
+        }
+      })();
+    }
+    return renderJobs.current[i];
+  }, []);
+  useEffect(() => {
+    (async () => {
+      for (let i = 0; i < renderSpecs.length; i++) await getRendered(i);
+    })();
+  }, []);
+
+  // Preview box follows the photo's real shape so the WHOLE image is visible
+  // (it used to be a fixed 350px box that cropped anything not that shape).
+  const previewUri = renderedUris[previewIndex] || capturedUris[previewIndex] || images[previewIndex];
+  const previewRatio = useImageAspect(previewUri);
 
  
 
@@ -323,6 +381,27 @@ function CreateImagePost() {
       }
 
       setLoading(true);
+      // Make sure every edit was actually drawn. If one wasn't, say so BEFORE
+      // uploading instead of silently posting an unedited photo.
+      const results = await Promise.all(images.map((_, i) => getRendered(i)));
+      const failedIdx = images.map((_, i) => i).filter((i) => renderSpecs[i] && !results[i]);
+      if (failedIdx.length) {
+        const reason = renderErrors.current[failedIdx[0]] || "unknown error";
+        const proceed = await new Promise((resolve) =>
+          Alert.alert(
+            "Couldn't apply your edits",
+            `${reason}\n\nPost anyway with the basic version of the photo?`,
+            [
+              { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+              { text: "Post anyway", onPress: () => resolve(true) },
+            ]
+          )
+        );
+        if (!proceed) {
+          setLoading(false);
+          return;
+        }
+      }
       const uploadedUrls = [];
       for (let i = 0; i < images.length; i++) {
         // If EditPost.js captured this frame directly (the normal case
@@ -330,8 +409,8 @@ function CreateImagePost() {
         // as-is. Only fall back to getEditedImage() (crop the raw
         // source using a guessed rect) for an image with no capture,
         // e.g. if the frame capture failed for some reason.
-        let edited = null;
-        if (capturedUris[i]) {
+        let edited = await getRendered(i); // drawn from the edit values (no screenshot)
+        if (!edited && capturedUris[i]) {
           const status = await inspectImageFile(capturedUris[i]);
           console.log(`[UPLOAD] #${i} capture ${capturedUris[i]} size=${status.size} decodes=${status.decodes}`);
           if (isUsableImage(status)) {
@@ -378,12 +457,51 @@ function CreateImagePost() {
     }
   };
 
+  const handleBack = () => {
+    if (navigation.canGoBack()) navigation.goBack();
+    else navigation.navigate("MainTabs", { screen: "Profile" });
+  };
+
   return (
+    <View style={{ flex: 1, backgroundColor: "#f4f4f4" }}>
+      <View style={styles.topBar}>
+        <TouchableOpacity onPress={handleBack} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+          <FeatherIcon name="arrow-left" size={22} color="#111" />
+        </TouchableOpacity>
+        <Text style={styles.topBarTitle}>New Post</Text>
+        <View style={{ width: 22 }} />
+      </View>
     <ScrollView style={styles.wrapper} contentContainerStyle={{ alignItems: "center", padding: 15 }}>
       <View style={styles.card}>
         {/* IMAGE PREVIEW CAROUSEL */}
         <View style={{ position: "relative" }}>
-          <Image source={{ uri: capturedUris[previewIndex] || images[previewIndex] }} style={styles.preview} />
+          <Image
+            source={{ uri: previewUri }}
+            style={[
+              styles.preview,
+              { height: undefined, aspectRatio: previewRatio ? clampRatio(previewRatio) : 1, backgroundColor: "#111" },
+            ]}
+            resizeMode="contain"
+          />
+          {(() => {
+            const st = renderStatus[previewIndex];
+            const hasFilter = !!(filters && filters[previewIndex] && String(filters[previewIndex]).trim());
+            let text = null, bad = false;
+            if (!renderSpecs[previewIndex]) {
+              if (hasFilter && __DEV__) { text = "⚠ Edit recipe not received — fallback in use"; bad = true; }
+            } else if (st?.state === "busy" || !st) {
+              text = SKIA_AVAILABLE ? "Applying your edits…" : "Applying your edits… (slow without Skia — can take about a minute)";
+            } else if (st.state === "failed") {
+              text = `⚠ Edits failed: ${st.msg}`; bad = true;
+            } else if (st.state === "done" && __DEV__) {
+              text = `✓ Edits applied (${st.msg})`;
+            }
+            return text ? (
+              <View pointerEvents="none" style={[styles.statusPill, bad && styles.statusPillBad]}>
+                <Text style={styles.statusText} numberOfLines={3}>{text}</Text>
+              </View>
+            ) : null;
+          })()}
           {images.length > 1 && (
             <>
               <View style={styles.dotsWrap}>
@@ -574,6 +692,7 @@ function CreateImagePost() {
         </TouchableOpacity>
       </View>
     </ScrollView>
+    </View>
   );
 }
 
@@ -581,8 +700,13 @@ export default CreateImagePost;
 
 const styles = StyleSheet.create({
   wrapper: { flex: 1, backgroundColor: "#f4f4f4" },
+  topBar: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 12, paddingHorizontal: 15, backgroundColor: "#fff", borderBottomWidth: 1, borderBottomColor: "#eee" },
+  topBarTitle: { fontSize: 16, fontWeight: "700", color: "#111" },
   card: { width: "100%", maxWidth: 380, backgroundColor: "#fff", borderRadius: 16, padding: 15 },
   preview: { width: "100%", height: 350, borderRadius: 12 },
+  statusPill: { position: "absolute", top: 8, left: 8, right: 8, backgroundColor: "rgba(0,0,0,0.65)", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 },
+  statusPillBad: { backgroundColor: "rgba(200,30,30,0.9)" },
+  statusText: { color: "#fff", fontSize: 12 },
   textarea: {
     width: "100%",
     minHeight: 80,

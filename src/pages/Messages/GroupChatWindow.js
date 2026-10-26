@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import {
   View,
   Text,
@@ -33,7 +33,7 @@ import Svg, { Path, Line, Circle, Polyline, Polygon, Rect, Defs, LinearGradient 
 import socket from "../../sockets/Sockets";
 import { SharedPostBubble, ForwardModal, getShareCaption } from "./SharePostBubble";
 import { ChatBubbleSkeleton } from "../../components/Skeleton/Skeleton";
-
+import { useBlockedIds } from "../../components/State/BlockStore";
 const API = Config.API_URL;
 const GOLDEN = "rgb(234,182,118)";
 
@@ -353,8 +353,6 @@ const MIME_TYPES = {
 };
 async function downloadFileToDevice(url, fileName) {
   try {
-    // Only Android 9 and below needs the storage permission.
-    // Android 10+ saves through MediaStore, which needs no permission.
     if (Platform.OS === "android" && Platform.Version <= 28) {
       const granted = await PermissionsAndroid.request(
         PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE,
@@ -371,30 +369,41 @@ async function downloadFileToDevice(url, fileName) {
     const mime = MIME_TYPES[ext] || "application/octet-stream";
     const { dirs } = ReactNativeBlobUtil.fs;
 
-    // 1) Download into the app's own cache (always writable)
+    // 1) Download into the app cache
     const tmpPath = `${dirs.CacheDir}/${Date.now()}_${safeName}`;
     const res = await ReactNativeBlobUtil.config({ fileCache: true, path: tmpPath }).fetch("GET", url);
     const status = res.info().status;
     if (status < 200 || status >= 300) throw new Error(`Server returned ${status}`);
 
-    // 2) Copy into the public Downloads folder
     if (Platform.OS === "android") {
-      if (ReactNativeBlobUtil.MediaCollection?.copyToMediaStore) {
-        await ReactNativeBlobUtil.MediaCollection.copyToMediaStore(
-          { name: safeName, parentFolder: "", mimeType: mime },
-          "Download",
-          tmpPath
-        );
-      } else {
-        // fallback for older react-native-blob-util versions
-        const dest = `${dirs.DownloadDir}/${safeName}`;
-        await ReactNativeBlobUtil.fs.cp(tmpPath, dest);
-        await ReactNativeBlobUtil.android.addCompleteDownload({
-          title: safeName, description: "Downloaded", mime, path: dest, showNotification: true,
-        });
+      // 2) Save a copy into public Downloads
+      try {
+        if (ReactNativeBlobUtil.MediaCollection?.copyToMediaStore) {
+          await ReactNativeBlobUtil.MediaCollection.copyToMediaStore(
+            { name: safeName, parentFolder: "", mimeType: mime },
+            "Download",
+            tmpPath
+          );
+        } else {
+          const dest = `${dirs.DownloadDir}/${safeName}`;
+          await ReactNativeBlobUtil.fs.cp(tmpPath, dest);
+          await ReactNativeBlobUtil.android.addCompleteDownload({
+            title: safeName, description: "Downloaded", mime, path: dest, showNotification: true,
+          });
+        }
+        ToastAndroid.show("Saved to Downloads", ToastAndroid.SHORT);
+      } catch (e) {
+        console.log("[download] save to Downloads failed:", e);
       }
-      ReactNativeBlobUtil.fs.unlink(tmpPath).catch(() => {});
-      Alert.alert("Saved", `${safeName} saved to Downloads.`);
+
+      // 3) Open with the device's app chooser (Drive PDF viewer, etc.)
+      try {
+        await ReactNativeBlobUtil.android.actionViewIntent(tmpPath, mime);
+      } catch (e) {
+        Alert.alert("No app found", "File was saved to Downloads, but no installed app can open this file type.");
+      }
+      // Don't unlink tmpPath here: the viewer app is still reading it.
+      // Android clears the cache folder on its own.
     } else {
       ReactNativeBlobUtil.ios.previewDocument(tmpPath);
     }
@@ -1169,6 +1178,7 @@ function GroupMessageBubble({ msg, fromMe, currentUser, members, onDelete, onEdi
 
 /* ─── Add Member sheet ─── */
 function AddMemberSheet({ chatId, existingMemberIds, onClose, onAdded }) {
+  const blockedIds = useBlockedIds();
   const [search, setSearch] = useState("");
   const [results, setResults] = useState([]);
   const [searching, setSearching] = useState(false);
@@ -1182,13 +1192,15 @@ function AddMemberSheet({ chatId, existingMemberIds, onClose, onAdded }) {
     timer.current = setTimeout(async () => {
       try {
         const data = await apiFetch(`${API}/messages/search-users?q=${encodeURIComponent(search)}`);
-        const users = (data.users || data.following || []).filter(u => !existingMemberIds.includes(u._id));
+        const users = (data.users || data.following || []).filter(
+  (u) => !existingMemberIds.includes(u._id) && !blockedIds.has(String(u._id))
+);
         setResults(users);
       } catch (err) { console.error(err); }
       setSearching(false);
     }, 300);
     return () => clearTimeout(timer.current);
-  }, [search, existingMemberIds]);
+  }, [search, existingMemberIds,blockedIds]);
 
   const toggle = (user) => {
     setSelected(prev => {
@@ -1573,6 +1585,7 @@ function WallpaperSheet({ current, onClose, onSelect, onPickPhoto }) {
 
 export default function GroupChatWindow({ group: initialGroup, currentUser, onClose, onRequestHandled }) {
   const [group, setGroup] = useState(initialGroup);
+  const blockedIds = useBlockedIds();
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(true);
@@ -1849,7 +1862,15 @@ export default function GroupChatWindow({ group: initialGroup, currentUser, onCl
   const refreshGroup = () => {
     apiFetch(`${API}/groups/${chatId}`).then(d => d.success && setGroup(d.group)).catch(() => {});
   };
-
+const visibleMessages = useMemo(
+  () =>
+    messages.filter((m) => {
+      if (m.isSystem) return true;
+      const uid = String(m.user?._id || m.user);
+      return uid === String(currentUser._id) || !blockedIds.has(uid);
+    }),
+  [messages, blockedIds, currentUser._id]
+);
   return (
     <View style={s.chatOverlay}>
       {showInfo && (
@@ -1925,7 +1946,7 @@ export default function GroupChatWindow({ group: initialGroup, currentUser, onCl
 <FlatList
   ref={scrollRef}
   style={{ flex: 1, backgroundColor: wallpaper?.type === "color" ? wallpaper.value : "transparent" }}
-  data={messages}
+  data={visibleMessages}
   keyExtractor={(item, i) => item._id || i.toString()}
   contentContainerStyle={{ padding: 14 }}
   initialNumToRender={15}

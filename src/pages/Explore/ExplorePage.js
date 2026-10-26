@@ -1383,6 +1383,18 @@ function TextPostCard({ p, navigation, onBlock, onNotInterested, onHide, onDelet
   );
 }
 
+// ONE rule for "should this post still appear in Explore?", used by BOTH the grid
+// and the full-screen post viewer. They used to filter differently: the viewer hid
+// deleted / hidden / not-interested posts but the grid didn't, so the grid kept
+// showing their thumbnails, and tapping one opened the NEXT post (the viewer had
+// dropped the tapped one, so everything shifted by one).
+function isPostHiddenInExplore(p, deletedIds) {
+  if (!p) return true;
+  if (deletedIds.includes(p._id)) return true;
+  const opt = getOptionState(p._id);
+  return opt.isNotInterested === true || opt.isHidden === true;
+}
+
 /* ─────────────────────────── PostFeedOverlay (full-screen Modal, opened from grid) ─────────────────────────── */
 // NEW: `onSheetOpen` threads straight through to whichever card is
 // currently rendering a Likers/Comments/Share sheet.
@@ -1390,7 +1402,7 @@ function TextPostCard({ p, navigation, onBlock, onNotInterested, onHide, onDelet
 const MemoTextPostCard = React.memo(TextPostCard);
 const MemoImagePostCard = React.memo(ImagePostCard);
 
-function PostFeedOverlay({ posts, startIndex, onClose, navigation, onFollowChange, myFollowingIds, storyAuthorIds, seenStoryIds, onOpenStory, onSheetOpen }) {
+function PostFeedOverlay({ posts, startIndex, onClose, navigation, onFollowChange, myFollowingIds, storyAuthorIds, seenStoryIds, onOpenStory, onSheetOpen, onPostDeleted }) {
   // Block state is shared app-wide (BlockStore).
   const blockedIds = useBlockedIds();
   const [deletedIds, setDeletedIds] = useState([]);
@@ -1402,7 +1414,13 @@ function PostFeedOverlay({ posts, startIndex, onClose, navigation, onFollowChang
   const handleBlock = useCallback(() => {}, []);
   const handleNotInterested = useCallback(() => {}, []);
   const handleHide = useCallback(() => {}, []);
-  const handleDeleted = useCallback((id) => setDeletedIds((prev) => [...prev, id]), []);
+  const handleDeleted = useCallback(
+    (id) => {
+      setDeletedIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+      onPostDeleted?.(id); // tell the Explore grid too, so the thumbnail goes away
+    },
+    [onPostDeleted]
+  );
 
   const orderedPosts = useMemo(() => {
     if (!posts.length) return posts;
@@ -1415,10 +1433,7 @@ function PostFeedOverlay({ posts, startIndex, onClose, navigation, onFollowChang
       orderedPosts.filter((p) => {
         const authorId = (p?.author?._id || p?.author)?.toString();
         if (blockedIds.has(authorId)) return false;
-        const opt = getOptionState(p._id);
-        if (opt.isNotInterested === true) return false;
-        if (opt.isHidden === true) return false;
-        if (deletedIds.includes(p._id)) return false;
+        if (isPostHiddenInExplore(p, deletedIds)) return false;
         return true;
       }),
     // optionsVersion forces a re-run when an option changes
@@ -1624,6 +1639,14 @@ function Explore() {
   const [explorePosts, setExplorePosts] = useState([]);
   const [exploreVideos, setExploreVideos] = useState([]);
   const [overlayStartIndex, setOverlayStartIndex] = useState(null);
+  // The list the viewer was opened with. Frozen at open time so deleting/hiding a post
+  // inside the viewer can't re-order the posts under you.
+  const [overlayPosts, setOverlayPosts] = useState(null);
+  // Posts deleted from the full-screen viewer — the grid must drop their thumbnails too.
+  const [deletedPostIds, setDeletedPostIds] = useState([]);
+  // Bumps whenever any screen changes a post option (hide / not-interested).
+  const [optionsVersion, setOptionsVersion] = useState(0);
+  useEffect(() => subscribeOptionChanges(() => setOptionsVersion((v) => v + 1)), []);
   const debounceRef = useRef(null);
   // NEW — lets the tab-reload handler below scroll the grid back to top.
   const exploreScrollRef = useRef(null);
@@ -1942,25 +1965,27 @@ const handleClear = () => {
   const visibleExplorePosts = useMemo(
     () =>
       explorePosts.filter((p) => {
+        if (isPostHiddenInExplore(p, deletedPostIds)) return false;
         const authorId = (p?.author?._id || p?.author)?.toString();
         if (blockedIds.has(authorId)) return false;
         if (authorId === myIdForFilter) return true;
         if (p?.author?.isPrivate) return false;
         return true;
       }),
-    [explorePosts, myIdForFilter, blockedIds]
+    [explorePosts, myIdForFilter, blockedIds, deletedPostIds, optionsVersion]
   );
 
   const visibleExploreVideos = useMemo(
     () =>
       exploreVideos.filter((p) => {
+        if (isPostHiddenInExplore(p, deletedPostIds)) return false;
         const authorId = (p?.author?._id || p?.author)?.toString();
         if (blockedIds.has(authorId)) return false;
         if (authorId === myIdForFilter) return true;
         if (p?.author?.isPrivate) return false;
         return true;
       }),
-    [exploreVideos, myIdForFilter, blockedIds]
+    [exploreVideos, myIdForFilter, blockedIds, deletedPostIds, optionsVersion]
   );
 
   const gridBlocks = useMemo(() => {
@@ -1991,10 +2016,24 @@ const handleClear = () => {
   const openPostOverlay = useCallback(
     (clickedPost) => {
       const idx = visibleExplorePosts.findIndex((p) => p._id === clickedPost._id);
-      setOverlayStartIndex(idx >= 0 ? idx : 0);
+      if (idx < 0) return; // not in the list any more — never open some other post instead
+      setOverlayPosts(visibleExplorePosts);
+      setOverlayStartIndex(idx);
     },
     [visibleExplorePosts]
   );
+
+  const handlePostDeleted = useCallback(
+    (id) => setDeletedPostIds((prev) => (prev.includes(id) ? prev : [...prev, id])),
+    []
+  );
+
+  // A post deleted from anywhere (another screen, the web app) disappears from the grid live.
+  useEffect(() => {
+    const onPostDeleted = ({ postId }) => handlePostDeleted(postId);
+    socket.on("postDeleted", onPostDeleted);
+    return () => socket.off("postDeleted", onPostDeleted);
+  }, [handlePostDeleted]);
 
   const openVideoReel = useCallback(
     (clickedVideo) => {
@@ -2144,10 +2183,12 @@ onPress={() => {
 
       {overlayStartIndex !== null && (
         <PostFeedOverlay
-          posts={visibleExplorePosts}
+          posts={overlayPosts || visibleExplorePosts}
           startIndex={overlayStartIndex}
+          onPostDeleted={handlePostDeleted}
           onClose={() => {
             setOverlayStartIndex(null);
+            setOverlayPosts(null);
             setSheetOpen(false); // safety net in case a sheet was left open
           }}
           navigation={navigation}
