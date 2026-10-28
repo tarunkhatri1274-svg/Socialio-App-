@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   View,
   Text,
@@ -240,6 +240,15 @@ function UserProfileView() {
   const canSeeFollowList = !isPrivate || followState === "following";
   const canSeePosts = !isPrivate || followState === "following";
 
+  // A post its owner hid from non-followers must not show to someone who doesn't follow
+  // them — even if the server's list still includes it (or it was hidden after this page
+  // loaded). The owner always still sees their own posts (they never reach this page: an
+  // own profile redirects to the Profile screen).
+  const visiblePosts = useMemo(
+    () => posts.filter((p) => !(p?.isHiddenFromNonFollowers === true && followState !== "following")),
+    [posts, followState]
+  );
+
   const [story, setStory] = useState(null);
   const [showStoryPreview, setShowStoryPreview] = useState(false);
   const hasStory = !!story && story.slides.length > 0;
@@ -357,7 +366,7 @@ function UserProfileView() {
     if (!userId) return;
     try {
       const res = await apiFetch(`${API}/auth/user/${userId}`);
-      if (!res.ok) { setError("Failed to load profile."); setLoading(false); return; }
+      if (!res.ok) { setError(res.status === 404 ? "User not found." : "Failed to load profile."); setLoading(false); return; }
       const data = await res.json();
       if (data.user) {
         setUser(data.user);
@@ -584,7 +593,7 @@ function UserProfileView() {
           try {
             const res = await apiFetch(`${API}/auth/block/${userId}`, { method: "POST" });
             const data = await res.json();
-            if (data.success) setBlocked(userId, true);
+            if (data.success) { setBlocked(userId, true); setMutuals([]); setMutualCount(0); }
           } catch {}
         },
       },
@@ -592,7 +601,7 @@ function UserProfileView() {
   };
 
   const handleMessageClick = async () => {
-    if (messageBusy) return;
+    if (messageBusy || isBlocked) return;
     setMessageBusy(true);
     try {
       const res = await apiFetch(`${API}/messages/chat/${myId}/${userId}`);
@@ -620,7 +629,7 @@ function UserProfileView() {
 
   const followersCount = user?.followers?.length ?? 0;
   const followingCount = user?.following?.length ?? 0;
-  const postsCount = posts.length;
+  const postsCount = visiblePosts.length;
 
   if (loading) {
     return (
@@ -772,7 +781,7 @@ function UserProfileView() {
         {!!user?.bio && <Text style={styles.bio}>{user.bio}</Text>}
 
         {/* ── Mutual Followers ── */}
-        {mutualCount > 0 && (
+        {!isBlocked && mutualCount > 0 && (
           <View style={styles.mutualRow}>
             <View style={styles.mutualAvatars}>
               {mutuals.slice(0, 3).map((m) => (
@@ -803,9 +812,11 @@ function UserProfileView() {
               isOwner={isOwnProfile}
               isBlocked={isBlocked}
             />
-            <TouchableOpacity style={[styles.messageBtn, messageBusy && { opacity: 0.6 }]} onPress={handleMessageClick} disabled={messageBusy}>
-              <Text style={{ fontWeight: "700", fontSize: 14, color: "#111" }}>{messageBusy ? "Opening…" : "Message"}</Text>
-            </TouchableOpacity>
+            {!isBlocked && (
+              <TouchableOpacity style={[styles.messageBtn, messageBusy && { opacity: 0.6 }]} onPress={handleMessageClick} disabled={messageBusy}>
+                <Text style={{ fontWeight: "700", fontSize: 14, color: "#111" }}>{messageBusy ? "Opening…" : "Message"}</Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity style={isBlocked ? styles.blockedBtn : styles.blockBtn} onPress={handleBlockUserBtn} disabled={isBlocked}>
               <Text style={{ fontWeight: "700", fontSize: 14, color: isBlocked ? "#333" : "#fff" }}>{isBlocked ? "Blocked" : "Block"}</Text>
             </TouchableOpacity>
@@ -849,9 +860,9 @@ function UserProfileView() {
             {/* ── Tab content: slides with your finger ── */}
             <View style={{ overflow: "hidden" }} {...tabSwipe.panHandlers}>
               <Animated.View style={{ padding: 10, transform: [{ translateX: tabSwipe.x }] }}>
-                {activeTab === "posts" && <Posts posts={posts} navigation={navigation} userId={userId} itemRefs={itemRefs} />}
-                {activeTab === "Shorts" && <Shorts posts={posts} userId={userId} navigation={navigation} itemRefs={itemRefs} />}
-                {activeTab === "text" && <TextPosts posts={posts} navigation={navigation} userId={userId} itemRefs={itemRefs} />}
+                {activeTab === "posts" && <Posts posts={visiblePosts} navigation={navigation} userId={userId} itemRefs={itemRefs} />}
+                {activeTab === "Shorts" && <Shorts posts={visiblePosts} userId={userId} navigation={navigation} itemRefs={itemRefs} />}
+                {activeTab === "text" && <TextPosts posts={visiblePosts} navigation={navigation} userId={userId} itemRefs={itemRefs} />}
               </Animated.View>
             </View>
           </>

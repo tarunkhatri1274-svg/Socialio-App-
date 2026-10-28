@@ -29,6 +29,8 @@ import { CameraRoll } from "@react-native-camera-roll/camera-roll";
 import { apiFetch, getCachedUser } from "../../api/authToken"; // adjust relative path — count folders to src/api/authToken.js
 import usePostOptions from "./usePostOptions";
 import Config from "react-native-config";
+import { ReactionButton, ReactionIcon, useReaction, reactionColor } from "./Reactions";
+import { BottomSheet, LikesSheet } from "./BottomSheet";
 import { useNavigation, useRoute } from "@react-navigation/native";
 import socket, { joinPostRoom, leavePostRoom } from "../../sockets/Sockets";
 import ShareSheet from "./ShareSheet";
@@ -132,82 +134,6 @@ function AnchoredMenu({ visible, coords, onClose, children }) {
   );
 }
 
-function BottomSheet({ title, onClose, children, inputBar, scrollViewRef, scrollable = true }) {
-    const [ready, setReady] = useState(false);
-  useEffect(() => {
-    const task = InteractionManager.runAfterInteractions(() => setReady(true));
-    return () => task.cancel();
-  }, []);
-  const translateY = useRef(new Animated.Value(0)).current;
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
-
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 2,
-      onMoveShouldSetPanResponderCapture: (_, g) => g.dy > 2 && Math.abs(g.dy) > Math.abs(g.dx),
-      onPanResponderTerminationRequest: () => false,
-      onPanResponderMove: (_, g) => {
-        if (g.dy > 0) translateY.setValue(g.dy);
-      },
-      onPanResponderRelease: (_, g) => {
-        if (g.dy > 80 || g.vy > 0.6) {
-          Animated.timing(translateY, { toValue: 600, duration: 180, useNativeDriver: false }).start(() =>
-            onCloseRef.current()
-          );
-        } else {
-          Animated.spring(translateY, { toValue: 0, useNativeDriver: false }).start();
-        }
-      },
-      onPanResponderTerminate: () => {
-        Animated.spring(translateY, { toValue: 0, useNativeDriver: false }).start();
-      },
-    })
-  ).current;
-
-  return (
-    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-        style={styles.sheetOverlay}
-      >
-        <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={onClose} />
-        <Animated.View style={[styles.sheet, { transform: [{ translateY }] }]}>
-          <View {...panResponder.panHandlers} style={{ paddingBottom: 4 }}>
-            <View style={styles.sheetHandle} />
-            <View style={styles.sheetHeader}>
-              <Text style={{ fontWeight: "700", fontSize: 15 }}>{title}</Text>
-              <TouchableOpacity
-                onPress={onClose}
-                style={styles.sheetCloseIcon}
-                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-              >
-                <FeatherIcon name="x" size={20} color="#333" />
-              </TouchableOpacity>
-            </View>
-          </View>
-
-{scrollable ? (
-  <ScrollView
-    ref={scrollViewRef}
-    style={{ flex: 1 }}
-    keyboardShouldPersistTaps="handled"
-    nestedScrollEnabled
-  >
-    {ready ? children : <ActivityIndicator style={{ marginTop: 30 }} color="#999" />}
-  </ScrollView>
-) : (
-  <View style={{ flex: 1 }}>
-    {ready ? children : <ActivityIndicator style={{ marginTop: 30 }} color="#999" />}
-  </View>
-)}
-          {inputBar}
-        </Animated.View>
-      </KeyboardAvoidingView>
-    </Modal>
-  );
-}
 
 /* ── Render co-author names "Instagram style" as individually pressable
    spans. ──
@@ -754,9 +680,9 @@ function PostCard({ p, onDeleted, pendingSheet = null }) {
     return () => socket.off("privacyChanged", onPrivacy);
   }, [authorId]);
 
-  const [liked, setLiked] = useState(false);
   const [likesCount, setLikesCount] = useState(p?.likes?.length || 0);
   const [likedByUsers, setLikedByUsers] = useState([]);
+  const { liked, setLiked, myReaction, react, quickToggle } = useReaction({ postId: p?._id, myId: currentUserId, likedByUsers, setLikesCount: setLikesCount, setLikedByUsers });
   const [saved, setSaved] = useState(() => isPostSaved(p?._id));
   const menu = useAnchoredMenu();
   const [showLikers, setShowLikers] = useState(false);
@@ -952,17 +878,7 @@ const onCollabResponded = ({ postId }) => {
 
   const toggleSave = () => toggleSavedPost(p);
 
-  const handleToggleLike = async () => {
-    try {
-      const res = await apiFetch(`${API}/auth/like/${p._id}`, { method: "POST"});
-      const data = await res.json();
-      if (data.success) {
-        setLiked(data.liked);
-        setLikesCount(data.totalLikes);
-        if (data.likedBy) setLikedByUsers(data.likedBy);
-      }
-    } catch {}
-  };
+  const handleToggleLike = () => quickToggle();
 
   // Double-tap gesture from MediaCarousel — only LIKES, never unlikes,
   // matching Instagram's convention (repeat double-taps just replay the
@@ -1109,14 +1025,14 @@ const onCollabResponded = ({ postId }) => {
          <MediaCarousel media={p?.media} onDoubleTapLike={handleDoubleTapLike} onIndexChange={setSlideIndex} />
 
         <View style={styles.actions}>
-          <TouchableOpacity onPress={handleToggleLike} style={styles.actionBtn}>
-            <Icon name="thumbs-up" solid={liked} size={16} color={liked ? "#f5a623" : "#666"} />
+          <ReactionButton myReaction={myReaction} onQuickPress={quickToggle} onReact={react} style={styles.actionBtn}>
+            <ReactionIcon reaction={myReaction} size={16} inactiveColor={"#666"} />
             {(!hideLikeCount || isOwner) && (
               <Text onPress={() => setShowLikers(true)} style={styles.likesCountText}>
                 {formatCount(likesCount)}
               </Text>
             )}
-          </TouchableOpacity>
+          </ReactionButton>
           {canComment && (
             <TouchableOpacity onPress={() => setShowComments(true)} style={styles.actionBtn}>
               <Icon name="comment" size={16} color="#666" />
@@ -1158,50 +1074,14 @@ const onCollabResponded = ({ postId }) => {
       </View>
 
       {showLikers && (
-        <BottomSheet
-          title="Liked by"
+        <LikesSheet
+          users={likedByUsers}
           onClose={() => {
             setShowLikers(false);
             setLikerSearch("");
           }}
-        >
-          {likedByUsers.length > 0 && (
-            <View style={{ paddingHorizontal: 12, paddingBottom: 8 }}>
-              <View style={styles.searchWrap}>
-                <FeatherIcon name="search" size={14} color="#999" />
-                <TextInput value={likerSearch} onChangeText={setLikerSearch} placeholder="Search" style={styles.searchInput} />
-                {!!likerSearch && (
-                  <TouchableOpacity onPress={() => setLikerSearch("")}>
-                    <FeatherIcon name="x" size={14} color="#999" />
-                  </TouchableOpacity>
-                )}
-              </View>
-            </View>
-          )}
-          <View style={{ paddingHorizontal: 12 }}>
-            {filteredLikers.length > 0 ? (
-              filteredLikers.map((u, i) => (
-                <TouchableOpacity
-                  key={u._id ?? i}
-                  style={styles.likerRow}
-                  onPress={() => {
-                    setShowLikers(false);
-                    setLikerSearch("");
-                    goToProfile(u._id);
-                  }}
-                >
-                  <Avatar src={u.profilePic} username={u.username} size={40} />
-                  <View>
-                    <Text style={{ fontWeight: "600", fontSize: 14 }}>{u.username}</Text>
-                    {!!u.bio && <Text style={{ fontSize: 12, color: "#999" }}>{u.bio}</Text>}
-                  </View>
-                </TouchableOpacity>
-              ))
-            ) : (
-              <Text style={styles.emptyText}>{likerSearch ? "No results found" : "No likes yet"}</Text>
-            )}
-          </View>
-        </BottomSheet>
+          onNavigate={goToProfile}
+        />
       )}
 
       {/* COLLABORATORS SHEET — NEW, mirrors the likers sheet. Opens from

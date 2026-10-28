@@ -32,6 +32,8 @@ import IonIcon from "react-native-vector-icons/Ionicons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useNavigation, useRoute, useIsFocused } from "@react-navigation/native";
 import Config from "react-native-config";
+import { ReactionButton, ReactionIcon, useReaction, reactionColor } from "../../components/PostCard/Reactions";
+import { BottomSheet, LikesSheet } from "../../components/PostCard/BottomSheet";
 import socket, { joinPostRoom, leavePostRoom } from "../../sockets/Sockets";
 import FeedStoryPreview from "../../components/StoryBar/FeedStoryPreview";
 import CommentSection from "../../components/PostCard/CommentSection";
@@ -521,9 +523,9 @@ function ProfileVideoCard({ p = {}, onBlock, onDeleted, isOwner, isVisible: isVi
   const canDownload = !disableDownload || isOwner;
   const canComment = !disableComments || isOwner;
 
-  const [liked, setLiked] = useState(false);
   const [likesCount, setLikesCount] = useState(p?.likes?.length || 0);
   const [likedByUsers, setLikedByUsers] = useState([]);
+  const { liked, setLiked, myReaction, react, quickToggle } = useReaction({ postId: p?._id, myId: MY_ID, likedByUsers, setLikesCount: setLikesCount, setLikedByUsers });
   const [saved, setSaved] = useState(() => isPostSaved(p?._id));
   const [paused, setPaused] = useState(false);
   const [muted, setMuted] = useState(false);
@@ -818,17 +820,7 @@ function ProfileVideoCard({ p = {}, onBlock, onDeleted, isOwner, isVisible: isVi
 
   const toggleSave = () => toggleSavedPost(p);
 
-  const performToggleLike = async () => {
-    try {
-      const res = await apiFetch(`${API}/auth/like/${p._id}`, { method: "POST" });
-      const data = await res.json();
-      if (data.success) {
-        setLiked(data.liked);
-        setLikesCount(data.totalLikes);
-        if (data.likedBy) setLikedByUsers(data.likedBy);
-      }
-    } catch (err) { console.log(err); }
-  };
+  const performToggleLike = () => quickToggle();
 
   const handleToggleLike = () => performToggleLike();
 
@@ -1037,9 +1029,9 @@ const videoSource = useMemo(
       {/* RIGHT ACTIONS */}
       <View style={S.rightActions}>
         <View style={{ alignItems: "center", gap: 4 }}>
-          <TouchableOpacity style={S.actionBtn} onPress={handleToggleLike}>
-            <FA5Icon name="thumbs-up" size={26} color={liked ? "#f5a623" : "#fff"} solid={liked} />
-          </TouchableOpacity>
+          <ReactionButton myReaction={myReaction} onQuickPress={quickToggle} onReact={react} style={S.actionBtn}>
+            <ReactionIcon reaction={myReaction} size={26} inactiveColor="#fff" />
+          </ReactionButton>
           {(!hideLikeCount || isOwner) && (
             <Text style={S.actionLabel} onPress={() => setShowLikers(true)}>{formatCount(likesCount)}</Text>
           )}
@@ -1136,37 +1128,14 @@ const videoSource = useMemo(
 
       {/* LIKERS SHEET */}
       {showLikers && (
-        <Modal visible transparent animationType="slide" onRequestClose={() => { setShowLikers(false); setLikerSearch(""); }}>
-          <TouchableOpacity style={sheet.overlay} activeOpacity={1} onPress={() => { setShowLikers(false); setLikerSearch(""); }}>
-            <TouchableOpacity activeOpacity={1} style={sheet.box} onPress={() => {}}>
-              <View style={sheet.handle} />
-              <View style={sheet.header}>
-                <Text style={{ fontWeight: "700" }}>Liked by</Text>
-                <TouchableOpacity style={sheet.closeX} onPress={() => { setShowLikers(false); setLikerSearch(""); }}><FeatherIcon name="x" size={18} /></TouchableOpacity>
-              </View>
-              {likedByUsers.length > 0 && (
-                <View style={{ paddingHorizontal: 12, paddingBottom: 8 }}>
-                  <View style={sheet.searchWrap}>
-                    <FeatherIcon name="search" size={14} color="#999" />
-                    <TextInput value={likerSearch} onChangeText={setLikerSearch} placeholder="Search" style={sheet.searchInput} />
-                    {likerSearch !== "" && <TouchableOpacity onPress={() => setLikerSearch("")}><FeatherIcon name="x" size={14} color="#999" /></TouchableOpacity>}
-                  </View>
-                </View>
-              )}
-              <ScrollView style={sheet.list}>
-                {filteredLikers.length > 0 ? filteredLikers.map((u, i) => (
-                  <TouchableOpacity key={u._id ?? i} style={sheet.row} onPress={() => { setShowLikers(false); setLikerSearch(""); goToProfile(u._id); }}>
-                    <Avatar src={u.profilePic} username={u.username} size={40} />
-                    <View>
-                      <Text style={{ fontWeight: "600", fontSize: 14 }}>{u.username}</Text>
-                      {!!u.bio && <Text style={{ fontSize: 12, color: "#999" }}>{u.bio}</Text>}
-                    </View>
-                  </TouchableOpacity>
-                )) : <Text style={sheet.empty}>{likerSearch ? "No results found" : "No likes yet"}</Text>}
-              </ScrollView>
-            </TouchableOpacity>
-          </TouchableOpacity>
-        </Modal>
+        <LikesSheet
+          users={likedByUsers}
+          onClose={() => {
+            setShowLikers(false);
+            setLikerSearch("");
+          }}
+          onNavigate={goToProfile}
+        />
       )}
 
       {/* VIEWERS SHEET */}

@@ -32,6 +32,8 @@ import usePostOptions from "../../components/PostCard/usePostOptions";
 import { recordPostView } from "../../components/State/ViewStore";
 import { useBlockedIds } from "../../components/State/BlockStore";
 import Config from "react-native-config";
+import { ReactionButton, ReactionIcon, useReaction, reactionColor } from "../../components/PostCard/Reactions";
+import { BottomSheet, LikesSheet } from "../../components/PostCard/BottomSheet";
 import { useNavigation, useRoute, useIsFocused } from "@react-navigation/native";
 import socket from "../../sockets/Sockets";
 import FeedStoryPreview from "../../components/StoryBar/FeedStoryPreview";
@@ -569,83 +571,6 @@ function FollowButton({ authorId, isPrivate, isOwner, isBlocked, myFollowingIds,
    whole sheet silently fails to paint — no error, no crash, just nothing
    on screen. `useNativeDriver: false` matches how the value is actually
    being driven, so there's no JS/native thread mismatch anymore. */
-function BottomSheet({ onClose, title, children, inputBar, scrollable = false }) {
-    const [ready, setReady] = useState(false);
-  useEffect(() => {
-    const task = InteractionManager.runAfterInteractions(() => setReady(true));
-    return () => task.cancel();
-  }, []);
-  const translateY = useRef(new Animated.Value(0)).current;
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
-
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 2,
-      onMoveShouldSetPanResponderCapture: (_, g) => g.dy > 2 && Math.abs(g.dy) > Math.abs(g.dx),
-      onPanResponderTerminationRequest: () => false,
-      onPanResponderMove: (_, g) => {
-        if (g.dy > 0) translateY.setValue(g.dy);
-      },
-      onPanResponderRelease: (_, g) => {
-        if (g.dy > 80 || g.vy > 0.6) {
-          Animated.timing(translateY, { toValue: 600, duration: 180, useNativeDriver: false }).start(() =>
-            onCloseRef.current()
-          );
-        } else {
-          Animated.spring(translateY, { toValue: 0, useNativeDriver: false }).start();
-        }
-      },
-      onPanResponderTerminate: () => {
-        Animated.spring(translateY, { toValue: 0, useNativeDriver: false }).start();
-      },
-    })
-  ).current;
-
-  return (
-    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-        style={[sheet.overlay]}
-      >
-        <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={onClose} />
-        <Animated.View style={[sheet.box, { transform: [{ translateY }] }]}>
-          {/* Drag zone: handle + header */}
-          <View {...panResponder.panHandlers} style={{ paddingBottom: 4 }}>
-            <View style={sheet.handle} />
-            <View style={sheet.header}>
-              <Text style={{ fontWeight: "700", fontSize: 15 }}>{title}</Text>
-              <TouchableOpacity
-                onPress={onClose}
-                style={sheet.closeX}
-                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-              >
-                <FeatherIcon name="x" size={20} color="#333" />
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          {scrollable ? (
-            <ScrollView
-              style={{ flex: 1 }}
-              contentContainerStyle={{ paddingHorizontal: 12, paddingTop: 12, paddingBottom: 0 }}
-              keyboardShouldPersistTaps="handled"
-              nestedScrollEnabled
-            >
-              {ready ? children : <ActivityIndicator style={{ marginTop: 30 }} color="#999" />}
-            </ScrollView>
-          ) : (
-            <View style={{ flex: 1 }}>
-              {ready ? children : <ActivityIndicator style={{ marginTop: 30 }} color="#999" />}
-            </View>
-          )}
-          {inputBar}
-        </Animated.View>
-      </KeyboardAvoidingView>
-    </Modal>
-  );
-}
 
 /* ── Story ring around the small profile-pic avatar (under the ⋮ menu). ── */
 function StoryRing({ children, onPress }) {
@@ -685,9 +610,9 @@ function ExploreReelCard({ p = {}, isVisible: isVisibleProp, onBlock, onDeleted,
   const canDownload = !disableDownload || isOwner;
   const canComment = !disableComments || isOwner;
 
-  const [liked, setLiked] = useState(false);
   const [likesCount, setLikesCount] = useState(p?.likes?.length || 0);
   const [likedByUsers, setLikedByUsers] = useState([]);
+  const { liked, setLiked, myReaction, react, quickToggle } = useReaction({ postId: p?._id, myId: MY_ID, likedByUsers, setLikesCount: setLikesCount, setLikedByUsers });
   const [saved, setSaved] = useState(() => isPostSaved(p?._id));
   const [paused, setPaused] = useState(false);
   const [muted, setMuted] = useState(false);
@@ -992,19 +917,7 @@ const isDownloadingRef = useRef(false);
 
   const toggleSave = () => toggleSavedPost(p);
 
-  const performToggleLike = async () => {
-    try {
-      const res = await apiFetch(`${API}/auth/like/${p._id}`, { method: "POST" });
-      const data = await res.json();
-      if (data.success) {
-        setLiked(data.liked);
-        setLikesCount(data.totalLikes);
-        if (data.likedBy) setLikedByUsers(data.likedBy);
-      }
-    } catch (err) {
-      console.log(err);
-    }
-  };
+  const performToggleLike = () => quickToggle();
 
   const handleToggleLike = () => performToggleLike();
 
@@ -1187,7 +1100,7 @@ const isDownloadingRef = useRef(false);
         {/* RIGHT ACTIONS */}
         <View style={S.rightActions}>
           <View style={{ alignItems: "center", gap: 4 }}>
-            <ActionBtn icon={<Icon name="thumbs-up" solid={liked} size={28} color={liked ? "#f5a623" : "#fff"} />} onPress={handleToggleLike} />
+            <ReactionButton myReaction={myReaction} onQuickPress={quickToggle} onReact={react} style={S.actionBtn}><ReactionIcon reaction={myReaction} size={28} inactiveColor="#fff" /></ReactionButton>
             {(!hideLikeCount || isOwner) && (
               <Text style={S.actionLabel} onPress={() => setShowLikers(true)}>
                 {formatCount(likesCount)}
@@ -1291,54 +1204,19 @@ const isDownloadingRef = useRef(false);
 
       {/* LIKERS SHEET */}
       {showLikers && (
-        <BottomSheet
-          title="Liked by"
+        <LikesSheet
+          users={likedByUsers}
           onClose={() => {
             setShowLikers(false);
             setLikerSearch("");
           }}
-        >
-          {likedByUsers.length > 0 && (
-            <View style={{ paddingHorizontal: 12, paddingBottom: 8 }}>
-              <View style={sheet.searchWrap}>
-                <FeatherIcon name="search" size={14} color="#999" />
-                <TextInput value={likerSearch} onChangeText={setLikerSearch} placeholder="Search" style={sheet.searchInput} />
-                {!!likerSearch && (
-                  <TouchableOpacity onPress={() => setLikerSearch("")}>
-                    <FeatherIcon name="x" size={14} color="#999" />
-                  </TouchableOpacity>
-                )}
-              </View>
-            </View>
-          )}
-          <FlatList
-            data={filteredLikers}
-            keyExtractor={(u, i) => u._id ?? i.toString()}
-            contentContainerStyle={{ paddingHorizontal: 12 }}
-            ListEmptyComponent={<Text style={sheet.empty}>{likerSearch ? "No results found" : "No likes yet"}</Text>}
-            renderItem={({ item: u }) => (
-              <TouchableOpacity
-                style={sheet.row}
-                onPress={() => {
-                  setShowLikers(false);
-                  setLikerSearch("");
-                  goToProfile(u._id);
-                }}
-              >
-                <Avatar src={u.profilePic} username={u.username} size={40} />
-                <View>
-                  <Text style={{ fontWeight: "600", fontSize: 14 }}>{u.username}</Text>
-                  {!!u.bio && <Text style={{ fontSize: 12, color: "#999" }}>{u.bio}</Text>}
-                </View>
-              </TouchableOpacity>
-            )}
-          />
-        </BottomSheet>
+          onNavigate={goToProfile}
+        />
       )}
 
       {/* VIEWERS SHEET */}
       {showViews && (
-        <BottomSheet
+        <BottomSheet scrollable={false} animationType="slide"
           title="Viewed by"
           onClose={() => {
             setShowViews(false);
@@ -1387,7 +1265,7 @@ const isDownloadingRef = useRef(false);
           from the "N others" text in CoAuthorHeader when a post has 3+
           collaborators (author + accepted collaborators). */}
       {showCollabList && (
-        <BottomSheet
+        <BottomSheet scrollable={false} animationType="slide"
           title="Collaborators"
           onClose={() => {
             setShowCollabList(false);
@@ -1434,7 +1312,7 @@ const isDownloadingRef = useRef(false);
 
 {/* COMMENTS SHEET */}
 {showComments && canComment && (
-  <BottomSheet
+  <BottomSheet scrollable={false} animationType="slide"
     title={`Comments (${formatCount(commentCount)})`}
     onClose={() => setShowComments(false)}
     inputBar={

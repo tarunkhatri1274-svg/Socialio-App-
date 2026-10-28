@@ -31,6 +31,8 @@ import Video from "react-native-video";
 import ReactNativeBlobUtil from "react-native-blob-util";
 import { CameraRoll } from "@react-native-camera-roll/camera-roll";
 import Config from "react-native-config";
+import { ReactionButton, ReactionIcon, useReaction, reactionColor } from "../../components/PostCard/Reactions";
+import { BottomSheet, LikesSheet } from "../../components/PostCard/BottomSheet";
 import { useNavigation } from "@react-navigation/native";
 import { carouselTouchProps } from "../../components/carouselTouch";
 import Navbar, { subscribeTabReload, useSwipeToChangeTab, setCommentsOpen } from "../../components/Navbar/Navbar";
@@ -278,77 +280,6 @@ function AnchoredMenu({ visible, coords, onClose, children }) {
     </Modal>
   );
 }
-function BottomSheet({ title, onClose, children, inputBar, scrollable = true }) {
-    const [ready, setReady] = useState(false);
-  useEffect(() => {
-    const task = InteractionManager.runAfterInteractions(() => setReady(true));
-    return () => task.cancel();
-  }, []);
-  const translateY = useRef(new Animated.Value(0)).current;
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
-
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 2,
-      onMoveShouldSetPanResponderCapture: (_, g) => g.dy > 2 && Math.abs(g.dy) > Math.abs(g.dx),
-      onPanResponderTerminationRequest: () => false,
-      onPanResponderMove: (_, g) => {
-        if (g.dy > 0) translateY.setValue(g.dy);
-      },
-      onPanResponderRelease: (_, g) => {
-        if (g.dy > 80 || g.vy > 0.6) {
-          Animated.timing(translateY, { toValue: 600, duration: 180, useNativeDriver: false }).start(() =>
-            onCloseRef.current()
-          );
-        } else {
-          Animated.spring(translateY, { toValue: 0, useNativeDriver: false }).start();
-        }
-      },
-      onPanResponderTerminate: () => {
-        Animated.spring(translateY, { toValue: 0, useNativeDriver: false }).start();
-      },
-    })
-  ).current;
-
-  return (
-    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-        style={styles.sheetOverlay}
-      >
-        <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={onClose} />
-        <Animated.View style={[styles.bottomSheet, { transform: [{ translateY }] }]}>
-          <View {...panResponder.panHandlers} style={{ paddingBottom: 4 }}>
-            <View style={styles.sheetHandle} />
-            <View style={styles.sheetTitleRow}>
-              <Text style={styles.sheetTitleText}>{title}</Text>
-              <TouchableOpacity
-                onPress={onClose}
-                style={styles.sheetCloseIcon}
-                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-              >
-                <FeatherIcon name="x" size={20} color="#333" />
-              </TouchableOpacity>
-            </View>
-          </View>
-
-{scrollable ? (
-  <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
-    {ready ? children : <ActivityIndicator style={{ marginTop: 30 }} color="#999" />}
-  </ScrollView>
-) : (
-  <View style={{ flex: 1 }}>
-    {ready ? children : <ActivityIndicator style={{ marginTop: 30 }} color="#999" />}
-  </View>
-)}
-          {inputBar}
-        </Animated.View>
-      </KeyboardAvoidingView>
-    </Modal>
-  );
-}
 
 /* ─────────────────────────── LikersSheet ─────────────────────────── */
 function LikersSheet({ postId, onClose, onNavigate }) {
@@ -380,47 +311,7 @@ function LikersSheet({ postId, onClose, onNavigate }) {
     };
   }, [postId]);
 
-  const filtered = likers.filter((u) => u.username?.toLowerCase().includes(search.toLowerCase()));
-
-  return (
-    <BottomSheet title="Liked by" onClose={onClose}>
-      <View style={{ paddingHorizontal: 12, paddingTop: 10, paddingBottom: 4 }}>
-        <View style={styles.searchWrap}>
-          <FeatherIcon name="search" size={14} color="#999" />
-          <TextInput value={search} onChangeText={setSearch} placeholder="Search" style={styles.searchInput} />
-          {!!search && (
-            <TouchableOpacity onPress={() => setSearch("")}>
-              <FeatherIcon name="x" size={14} color="#999" />
-            </TouchableOpacity>
-          )}
-        </View>
-      </View>
-      <View style={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: 20 }}>
-        {loading ? (
-          <Text style={styles.emptyText}>Loading...</Text>
-        ) : filtered.length === 0 ? (
-          <Text style={styles.emptyText}>{search ? "No results found" : "No likes yet"}</Text>
-        ) : (
-          filtered.map((u, i) => (
-            <TouchableOpacity
-              key={u._id ?? i}
-              onPress={() => {
-                onClose();
-                onNavigate(u._id);
-              }}
-              style={styles.userRow}
-            >
-              <Avatar src={u.profilePic} username={u.username} size={40} />
-              <View>
-                <Text style={{ fontSize: 15, fontWeight: "600" }}>{u.username}</Text>
-                {!!u.bio && <Text style={{ fontSize: 12, color: "#999" }}>{u.bio}</Text>}
-              </View>
-            </TouchableOpacity>
-          ))
-        )}
-      </View>
-    </BottomSheet>
-  );
+  return <LikesSheet users={likers} loading={loading} onClose={onClose} onNavigate={onNavigate} />;
 }
 
 /* ─────────────────────────── CommentsSheet ─────────────────────────── */
@@ -734,9 +625,9 @@ const isDownloadingRef = useRef(false);
   const canDownload = !disableDownload || isOwner;
   const canComment = !disableComments || isOwner;
 
-  const [liked, setLiked] = useState(false);
   const [likesCount, setLikesCount] = useState(p?.likes?.length || 0);
   const [likedByUsers, setLikedByUsers] = useState([]);
+  const { liked, setLiked, myReaction, react, quickToggle } = useReaction({ postId: p?._id, myId: currentUserId, likedByUsers, setLikesCount: setLikesCount, setLikedByUsers });
   const [saved, setSaved] = useState(() => isPostSaved(p?._id));
   const menu = useAnchoredMenu();
   const [showLikers, setShowLikers] = useState(false);
@@ -911,18 +802,7 @@ const isDownloadingRef = useRef(false);
     }
   };
 
-  const handleLike = async () => {
-    try {
-      const res = await apiFetch(`${API}/auth/like/${p._id}`, { method: "POST" });
-      const data = await res.json();
-      if (data.success) {
-        setLiked(data.liked);
-        setLikesCount(data.totalLikes);
-      }
-    } catch (err) {
-      console.log(err);
-    }
-  };
+  const handleLike = () => quickToggle();
 
   const triggerDoubleTapLike = () => {
     if (!liked) handleLike();
@@ -1024,14 +904,14 @@ const isDownloadingRef = useRef(false);
         <FeedCollabRow collaborators={collaborators} navigation={navigation} />
 
         <View style={styles.imgActions}>
-          <TouchableOpacity onPress={handleLike} style={styles.imgActionBtn}>
-            <Icon name="thumbs-up" solid={liked} size={17} color={liked ? "#f5a623" : "#555"} />
+          <ReactionButton myReaction={myReaction} onQuickPress={quickToggle} onReact={react} style={styles.imgActionBtn}>
+            <ReactionIcon reaction={myReaction} size={17} inactiveColor={"#555"} />
             {(!hideLikeCount || isOwner) && (
-              <Text onPress={() => setShowLikers(true)} style={{ fontSize: 13, fontWeight: "600", color: liked ? "#f5a623" : "#555" }}>
+              <Text onPress={() => setShowLikers(true)} style={{ fontSize: 13, fontWeight: "600", color: liked ? reactionColor(myReaction) : "#555" }}>
                 {formatCount(likesCount)}
               </Text>
             )}
-          </TouchableOpacity>
+          </ReactionButton>
           {canComment && (
             <TouchableOpacity onPress={() => setShowComments(true)} style={styles.imgActionBtn}>
               <Icon name="comment" size={17} color="#555" />
@@ -1078,9 +958,9 @@ function TextPostCard({ p, navigation, onBlock, onNotInterested, onHide, onDelet
   const disableComments = !!p?.disableComments;
   const canComment = !disableComments || isOwner;
 
-  const [liked, setLiked] = useState(false);
   const [likeCount, setLikeCount] = useState(p?.likes?.length || 0);
   const [likedByUsers, setLikedByUsers] = useState([]);
+  const { liked, setLiked, myReaction, react, quickToggle } = useReaction({ postId: p?._id, myId: currentUserId, likedByUsers, setLikesCount: setLikeCount, setLikedByUsers });
   const [saved, setSaved] = useState(() => isPostSaved(p?._id));
   const menu = useAnchoredMenu();
   const [heartAnim, setHeartAnim] = useState(false);
@@ -1214,19 +1094,10 @@ function TextPostCard({ p, navigation, onBlock, onNotInterested, onHide, onDelet
 
 
 
-  const handleLike = async () => {
+  const handleLike = () => {
     setHeartAnim(true);
     setTimeout(() => setHeartAnim(false), 300);
-    try {
-      const res = await apiFetch(`${API}/auth/like/${p._id}`, { method: "POST" });
-      const data = await res.json();
-      if (data.success) {
-        setLiked(data.liked);
-        setLikeCount(data.totalLikes);
-      }
-    } catch (err) {
-      console.log(err);
-    }
+    quickToggle();
   };
 
   const triggerDoubleTapLike = () => {
@@ -1344,14 +1215,14 @@ function TextPostCard({ p, navigation, onBlock, onNotInterested, onHide, onDelet
           <FeedCollabRow collaborators={collaborators} navigation={navigation} />
 
           <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 10, paddingBottom: 4 }}>
-            <TouchableOpacity onPress={handleLike} style={styles.textActionBtn}>
-              <Icon name="thumbs-up" solid={liked} size={16} color={liked ? "#e53935" : "#555"} />
+            <ReactionButton myReaction={myReaction} onQuickPress={quickToggle} onReact={react} style={styles.textActionBtn}>
+              <ReactionIcon reaction={myReaction} size={16} inactiveColor={"#555"} />
               {(!hideLikeCount || isOwner) && (
-                <Text onPress={() => setShowLikers(true)} style={{ fontSize: 13, fontWeight: "600", color: liked ? "#e53935" : "#555" }}>
+                <Text onPress={() => setShowLikers(true)} style={{ fontSize: 13, fontWeight: "600", color: liked ? reactionColor(myReaction) : "#555" }}>
                   {formatCount(likeCount)}
                 </Text>
               )}
-            </TouchableOpacity>
+            </ReactionButton>
             {canComment && (
               <TouchableOpacity onPress={() => setShowComments(true)} style={styles.textActionBtn}>
                 <Icon name="comment" size={15} color="#555" />
