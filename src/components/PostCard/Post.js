@@ -39,6 +39,7 @@ import { useFollowStore } from "../../pages/Profile/UseFollowState";
 import { isPostSaved, toggleSavedPost, subscribeSavedPosts } from "../State/SavedPostStore";
 import { carouselTouchProps } from "../../components/carouselTouch";
 import { useCarouselHeight } from "./PostImage";
+import { saveMediaToGallery } from "../../utils/saveToGallery";
 const API = Config.API_URL;
 const SCREEN_WIDTH = Dimensions.get("window").width;
 const SCREEN_HEIGHT = Dimensions.get("window").height;
@@ -921,7 +922,6 @@ const onCollabResponded = ({ postId }) => {
     );
     return granted === PermissionsAndroid.RESULTS.GRANTED;
   };
-
   const download = async () => {
     if (!canDownload) return;
     try {
@@ -932,34 +932,17 @@ const onCollabResponded = ({ postId }) => {
       }
 
       const items = p?.media || [];
-      const { dirs } = ReactNativeBlobUtil.fs;
 
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
         const isVideo = item.type === "video" || /\.(mp4|mov|m4v)(\?|$)/i.test(item.url);
-        const ext = isVideo ? "mp4" : "jpg";
-        const fileName = `${p._id || "post"}_${Date.now()}_${i}.${ext}`;
-        const localPath = `${dirs.CacheDir}/${fileName}`;
-
-        // Download the actual bytes to a local file (this is the part
-        // Linking.openURL never did — it just deep-linked out to a browser).
-        const res = await ReactNativeBlobUtil.config({ path: localPath, fileCache: true }).fetch(
-          "GET",
-          item.url
-        );
-
-        // Hand the local file to the OS gallery/photos app directly.
-        await CameraRoll.save(`file://${res.path()}`, {
-          type: isVideo ? "video" : "photo",
-          album: "Downloads",
-        });
-
-        if (i < items.length - 1) await new Promise((r) => setTimeout(r, 200));
+        await saveMediaToGallery(item.url, { isVideo, name: `${p._id || "post"}_${Date.now()}_${i}` });
       }
 
       setDownloadsCount((prev) => prev + 1);
       Alert.alert("Saved", "Post saved to your gallery.");
     } catch (err) {
+      console.log("[download] failed:", err?.message);
       Alert.alert("Download failed", "Something went wrong while saving this post.");
     }
   };

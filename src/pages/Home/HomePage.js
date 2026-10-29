@@ -39,6 +39,7 @@ import { BottomSheet, LikesSheet } from "../../components/PostCard/BottomSheet";
 import SocialioNativeAd from '../../components/Ads/SocialioNativeAd';
 import { useNavigation, useIsFocused, useFocusEffect } from "@react-navigation/native";
 import { carouselTouchProps } from "../../components/carouselTouch";
+import { saveMediaToGallery } from "../../utils/saveToGallery";
 // These sibling files come from your project — convert/point them at their
 // RN versions. They're not included in this conversion since they weren't provided.
 // NEW — useSwipeToChangeTab / subscribeTabReload: shared screen-wide swipe
@@ -855,7 +856,6 @@ const isDownloadingRef = useRef(false);
   }, [p?._id]);
 
   const toggleSave = () => toggleSavedPost(p);
-
   const download = async () => {
     if (!canDownload || isDownloadingRef.current) return;
     const mediaList = p?.media || [];
@@ -869,30 +869,10 @@ const isDownloadingRef = useRef(false);
         return;
       }
 
-      const { dirs } = ReactNativeBlobUtil.fs;
-
       for (let i = 0; i < mediaList.length; i++) {
         const item = mediaList[i];
         const isVideo = item.type === "video" || /\.(mp4|mov|m4v)(\?|$)/i.test(item.url);
-        const ext = isVideo ? "mp4" : "jpg";
-        const localPath = `${dirs.CacheDir}/${p?._id || "post"}_${Date.now()}_${i}.${ext}`;
-
-        try {
-          // Download the actual bytes to a local file (no browser involved)
-          const res = await ReactNativeBlobUtil.config({ path: localPath, fileCache: true }).fetch(
-            "GET",
-            item.url
-          );
-
-          // Save the local file straight into the gallery
-          await CameraRoll.save(`file://${res.path()}`, {
-            type: isVideo ? "video" : "photo",
-            album: "Downloads",
-          });
-        } finally {
-          // Remove the temp copy so the cache doesn't fill up
-          ReactNativeBlobUtil.fs.unlink(localPath).catch(() => {});
-        }
+        await saveMediaToGallery(item.url, { isVideo, name: `${p?._id || "post"}_${Date.now()}_${i}` });
       }
 
       setDownloadCount((c) => c + 1);
@@ -1262,30 +1242,10 @@ const isDownloadingRef = useRef(false);
         return;
       }
 
-      const { dirs } = ReactNativeBlobUtil.fs;
-
       for (let i = 0; i < mediaList.length; i++) {
         const item = mediaList[i];
         const isVideo = item.type === "video" || /\.(mp4|mov|m4v)(\?|$)/i.test(item.url);
-        const ext = isVideo ? "mp4" : "jpg";
-        const localPath = `${dirs.CacheDir}/${p?._id || "post"}_${Date.now()}_${i}.${ext}`;
-
-        try {
-          // Download the actual bytes to a local file (no browser involved)
-          const res = await ReactNativeBlobUtil.config({ path: localPath, fileCache: true }).fetch(
-            "GET",
-            item.url
-          );
-
-          // Save the local file straight into the gallery
-          await CameraRoll.save(`file://${res.path()}`, {
-            type: isVideo ? "video" : "photo",
-            album: "Downloads",
-          });
-        } finally {
-          // Remove the temp copy so the cache doesn't fill up
-          ReactNativeBlobUtil.fs.unlink(localPath).catch(() => {});
-        }
+        await saveMediaToGallery(item.url, { isVideo, name: `${p?._id || "post"}_${Date.now()}_${i}` });
       }
 
       setDownloadCount((c) => c + 1);

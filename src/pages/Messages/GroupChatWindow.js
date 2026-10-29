@@ -17,6 +17,7 @@ import {
   Dimensions,
     Platform,
   PermissionsAndroid,
+  ToastAndroid,
   Switch,
 } from "react-native";
 import ReactNativeBlobUtil from "react-native-blob-util";
@@ -426,6 +427,7 @@ const vStyles = StyleSheet.create({
   wrap: { width: VIDEO_W, height: VIDEO_H, marginBottom: 6, borderRadius: 12, overflow: "hidden", backgroundColor: "#000" },
   center: { ...StyleSheet.absoluteFillObject, alignItems: "center", justifyContent: "center" },
   bigPlay: { width: 46, height: 46, borderRadius: 23, backgroundColor: "rgba(0,0,0,0.55)", alignItems: "center", justifyContent: "center", paddingLeft: 3 },
+  dlBtnStatic: { width: 38, height: 38, borderRadius: 19, backgroundColor: "rgba(255,255,255,0.18)", alignItems: "center", justifyContent: "center" },
   dlBtn: { position: "absolute", top: 8, right: 8, width: 30, height: 30, borderRadius: 15, backgroundColor: "rgba(0,0,0,0.55)", alignItems: "center", justifyContent: "center" },
   bar: { position: "absolute", left: 0, right: 0, bottom: 0, height: 34, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 10, backgroundColor: "rgba(0,0,0,0.5)" },
   time: { color: "#fff", fontSize: 10.5, minWidth: 62 },
@@ -548,8 +550,60 @@ function VideoBubble({ media }) {
     </View>
   );
 }
+/* ─── Image bubble (tap to view full screen + download button) ─── */
+function ImageBubble({ media }) {
+  const [downloading, setDownloading] = useState(false);
+  const [viewerOpen, setViewerOpen] = useState(false);
+
+  // while the message is still uploading, url is a local file:// uri
+  const canDownload = /^https?:/i.test(media.url);
+  let fileName = media.fileName || media.url?.split("/").pop()?.split("?")[0] || "image";
+  if (!/\.[a-z0-9]{2,4}$/i.test(fileName)) fileName += ".jpg";
+
+  const handleDownload = async () => {
+    if (downloading) return;
+    setDownloading(true);
+    await downloadFileToDevice(media.url, fileName);
+    setDownloading(false);
+  };
+
+  return (
+    <View style={vStyles.wrap}>
+      <TouchableOpacity activeOpacity={0.9} style={StyleSheet.absoluteFill} onPress={() => setViewerOpen(true)}>
+        <Image source={{ uri: media.url }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+      </TouchableOpacity>
+
+      {canDownload && (
+        <TouchableOpacity style={vStyles.dlBtn} onPress={handleDownload} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+          {downloading ? <ActivityIndicator size="small" color="#fff" /> : <DownloadIcon color="#fff" size={16} />}
+        </TouchableOpacity>
+      )}
+
+      <Modal visible={viewerOpen} transparent animationType="fade" onRequestClose={() => setViewerOpen(false)}>
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.95)", justifyContent: "center" }}>
+          <Image source={{ uri: media.url }} style={{ width: "100%", height: "80%" }} resizeMode="contain" />
+          <View style={{ position: "absolute", top: 40, right: 16, flexDirection: "row", gap: 12 }}>
+            {canDownload && (
+              <TouchableOpacity style={vStyles.dlBtnStatic} onPress={handleDownload}>
+                {downloading ? <ActivityIndicator size="small" color="#fff" /> : <DownloadIcon color="#fff" size={18} />}
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity style={vStyles.dlBtnStatic} onPress={() => setViewerOpen(false)}>
+              <CloseIcon color="#fff" size={18} />
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
 function MediaPreview({ media, fromMe }) {
   if (!media?.url) return null;
+
+  if (media.mediaType === "image") {
+    return <ImageBubble media={media} />;
+  }
 
   if (media.mediaType === "video") {
     return <VideoBubble media={media} />;

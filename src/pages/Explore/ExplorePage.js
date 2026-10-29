@@ -26,7 +26,7 @@ import { useRefresh, useSwipeTabs } from "../../hooks/useRefreshAndSwipe";
 import usePostOptions, { getOptionState, subscribeOptionChanges } from "../../components/PostCard/usePostOptions";
 import Icon from "react-native-vector-icons/FontAwesome5";
 import FeatherIcon from "react-native-vector-icons/Feather";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { saveMediaToGallery } from "../../utils/saveToGallery";
 import Video from "react-native-video";
 import ReactNativeBlobUtil from "react-native-blob-util";
 import { CameraRoll } from "@react-native-camera-roll/camera-roll";
@@ -754,9 +754,6 @@ const isDownloadingRef = useRef(false);
 
   const toggleSave = () => toggleSavedPost(p);
 
-  // NOTE: web version dropped target="_blank" to dodge popup blockers —
-  // not applicable on native. For a real "save to device" flow, wire this
-  // to react-native-blob-util or @react-native-camera-roll/camera-roll.
   const download = async () => {
     if (!canDownload || isDownloadingRef.current) return;
     const mediaList = p?.media || [];
@@ -770,27 +767,10 @@ const isDownloadingRef = useRef(false);
         return;
       }
 
-      const { dirs } = ReactNativeBlobUtil.fs;
-
       for (let i = 0; i < mediaList.length; i++) {
         const item = mediaList[i];
         const isVideo = item.type === "video" || /\.(mp4|mov|m4v)(\?|$)/i.test(item.url);
-        const ext = isVideo ? "mp4" : "jpg";
-        const localPath = `${dirs.CacheDir}/${p?._id || "post"}_${Date.now()}_${i}.${ext}`;
-
-        try {
-          const res = await ReactNativeBlobUtil.config({ path: localPath, fileCache: true }).fetch(
-            "GET",
-            item.url
-          );
-
-          await CameraRoll.save(`file://${res.path()}`, {
-            type: isVideo ? "video" : "photo",
-            album: "Downloads",
-          });
-        } finally {
-          ReactNativeBlobUtil.fs.unlink(localPath).catch(() => {});
-        }
+        await saveMediaToGallery(item.url, { isVideo, name: `${p?._id || "post"}_${Date.now()}_${i}` });
       }
 
       Alert.alert("Saved", "Post saved to your gallery.");

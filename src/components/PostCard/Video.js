@@ -24,11 +24,12 @@ import Icon from "react-native-vector-icons/FontAwesome5";
 import FeatherIcon from "react-native-vector-icons/Feather";
 import IonIcon from "react-native-vector-icons/Ionicons";
 import Video from "react-native-video";
+import VideoSeekBar from "./VideoSeekBar";
 import ReactNativeBlobUtil from "react-native-blob-util";
 import { CameraRoll } from "@react-native-camera-roll/camera-roll";
 import LinearGradient from "react-native-linear-gradient";
 import { apiFetch, getCachedUser, saveAuthSession } from "../../api/authToken"; // adjust relative path
-
+import { saveMediaToGallery } from "../../utils/saveToGallery";
 import usePostOptions from "./usePostOptions";
 import { recordPostView } from "../State/ViewStore";
 import Config from "react-native-config";
@@ -603,6 +604,7 @@ function StoryRing({ children, onPress }) {
 function Videopost({
   p = {},
   hasNavbar = true,
+  navbarHeight,
   isVisible: isVisibleProp,
   onBlock,
   onSheetOpen,
@@ -638,6 +640,9 @@ const isOwner = MY_ID === p?.author?._id?.toString() || MY_ID === p?.author?.toS
   const [saved, setSaved] = useState(() => isPostSaved(p?._id));
   const [paused, setPaused] = useState(false);
   const [muted, setMuted] = useState(false);
+  const videoRef = useRef(null);
+  const seekBarRef = useRef(null);
+  const [scrubbing, setScrubbing] = useState(false);
 
   const isScreenFocused = useIsFocused();
   const isVisible = (isVisibleProp ?? true) && isScreenFocused;
@@ -1034,7 +1039,7 @@ socket.on(`post:${p._id}:likes`, onLikes);
   // swap for @react-native-camera-roll/camera-roll.
   const requestSavePermission = async () => {
     if (Platform.OS !== "android") return true;
-    if (Platform.Version >= 33) return true; // CameraRoll.save needs no runtime perm on API 33+
+    if (Platform.Version >= 33) return true; 
     const granted = await PermissionsAndroid.request(
       PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE,
       {
@@ -1053,7 +1058,6 @@ socket.on(`post:${p._id}:likes`, onLikes);
     if (!videoUrl) return;
 
     isDownloadingRef.current = true;
-    let localPath = null;
     try {
       const hasPermission = await requestSavePermission();
       if (!hasPermission) {
@@ -1061,36 +1065,17 @@ socket.on(`post:${p._id}:likes`, onLikes);
         return;
       }
 
-      const { dirs } = ReactNativeBlobUtil.fs;
-      localPath = `${dirs.CacheDir}/${p?._id || "video"}_${Date.now()}.mp4`;
-
-      // Download the actual bytes to a local file (no browser involved)
-      const res = await ReactNativeBlobUtil.config({ path: localPath, fileCache: true }).fetch(
-        "GET",
-        videoUrl
-      );
-
-      // Save the local file straight into the gallery
-      await CameraRoll.save(`file://${res.path()}`, {
-        type: "video",
-        album: "Downloads",
-      });
+      await saveMediaToGallery(videoUrl, { isVideo: true, name: `${p?._id || "video"}_${Date.now()}` });
 
       setDownloadCount((c) => c + 1);
       Alert.alert("Saved", "Video saved to your gallery.");
     } catch (err) {
-      console.error("[download-video] failed:", err?.message);
+      console.log("[download-video] failed:", err?.message);
       Alert.alert("Download failed", "Something went wrong while saving this video.");
     } finally {
       isDownloadingRef.current = false;
-      // Clean up the temp file so the cache doesn't fill up with videos
-      if (localPath) ReactNativeBlobUtil.fs.unlink(localPath).catch(() => {});
     }
   };
-
-
-
-
   const addComment = async () => {
     if (!commentText.trim() || !canComment) return;
     try {
@@ -1136,12 +1121,16 @@ socket.on(`post:${p._id}:likes`, onLikes);
     interaction this video needs. */}
 <View style={S.video} pointerEvents="none">
   <Video
+    ref={videoRef}
+    progressUpdateInterval={100}
+    onLoad={(e) => seekBarRef.current?.setDuration(e.duration)}
+    onProgress={(e) => seekBarRef.current?.setProgress(e.currentTime)}
     source={isVisible ? { uri: p?.media?.[0]?.url || "" } : undefined}
     style={S.video}
     resizeMode="contain"
     repeat
     muted={muted}
-    paused={!isVisible || paused}
+    paused={!isVisible || paused || scrubbing}
   />
 </View>
           <LinearGradient
@@ -1163,6 +1152,9 @@ socket.on(`post:${p._id}:likes`, onLikes);
             </View>
           )}
         </TouchableOpacity>
+
+        {/* SEEK BAR — drag left/right to reverse/forward */}
+        <VideoSeekBar ref={seekBarRef} videoRef={videoRef} onScrubChange={setScrubbing} bottom={hasNavbar ? (navbarHeight || 50) + 10 : 0} />
 
         {/* TOP BAR */}
         <View style={S.topBar} pointerEvents="none">

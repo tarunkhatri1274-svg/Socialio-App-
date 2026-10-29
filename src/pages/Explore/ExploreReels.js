@@ -24,10 +24,11 @@ import Icon from "react-native-vector-icons/FontAwesome5";
 import FeatherIcon from "react-native-vector-icons/Feather";
 import IonIcon from "react-native-vector-icons/Ionicons";
 import Video from "react-native-video";
+import VideoSeekBar from "../../components/PostCard/VideoSeekBar";
 import ReactNativeBlobUtil from "react-native-blob-util";
 import { CameraRoll } from "@react-native-camera-roll/camera-roll";
 import { apiFetch, getCachedUser, updateCachedUser, useAuth } from "../../api/authToken";
-
+import { saveMediaToGallery } from "../../utils/saveToGallery";
 import usePostOptions from "../../components/PostCard/usePostOptions";
 import { recordPostView } from "../../components/State/ViewStore";
 import { useBlockedIds } from "../../components/State/BlockStore";
@@ -616,6 +617,9 @@ function ExploreReelCard({ p = {}, isVisible: isVisibleProp, onBlock, onDeleted,
   const [saved, setSaved] = useState(() => isPostSaved(p?._id));
   const [paused, setPaused] = useState(false);
   const [muted, setMuted] = useState(false);
+  const videoRef = useRef(null);
+  const seekBarRef = useRef(null);
+  const [scrubbing, setScrubbing] = useState(false);
   const menu = useAnchoredMenu();
   const [flashPause, setFlashPause] = useState(false);
   const [showLikeBurst, setShowLikeBurst] = useState(false);
@@ -994,7 +998,6 @@ const isDownloadingRef = useRef(false);
     );
     return granted === PermissionsAndroid.RESULTS.GRANTED;
   };
-
   const handleDownload = async () => {
     if (!canDownload || isDownloadingRef.current) return;
 
@@ -1002,7 +1005,6 @@ const isDownloadingRef = useRef(false);
     if (!videoUrl) return;
 
     isDownloadingRef.current = true;
-    let localPath = null;
     try {
       const hasPermission = await requestSavePermission();
       if (!hasPermission) {
@@ -1010,20 +1012,7 @@ const isDownloadingRef = useRef(false);
         return;
       }
 
-      const { dirs } = ReactNativeBlobUtil.fs;
-      localPath = `${dirs.CacheDir}/${p?._id || "video"}_${Date.now()}.mp4`;
-
-      // Download the actual bytes to a local file (no browser involved)
-      const res = await ReactNativeBlobUtil.config({ path: localPath, fileCache: true }).fetch(
-        "GET",
-        videoUrl
-      );
-
-      // Save the local file straight into the gallery
-      await CameraRoll.save(`file://${res.path()}`, {
-        type: "video",
-        album: "Downloads",
-      });
+      await saveMediaToGallery(videoUrl, { isVideo: true, name: `${p?._id || "video"}_${Date.now()}` });
 
       setDownloadCount((c) => c + 1);
       Alert.alert("Saved", "Video saved to your gallery.");
@@ -1032,8 +1021,6 @@ const isDownloadingRef = useRef(false);
       Alert.alert("Download failed", "Something went wrong while saving this video.");
     } finally {
       isDownloadingRef.current = false;
-      // Clean up the temp file so the cache doesn't fill up with videos
-      if (localPath) ReactNativeBlobUtil.fs.unlink(localPath).catch(() => {});
     }
   };
 
@@ -1074,12 +1061,16 @@ const isDownloadingRef = useRef(false);
         <TouchableOpacity activeOpacity={1} style={S.videoBox} onPress={handleVideoTap}>
 <View style={S.video} pointerEvents="none">
   <Video
+    ref={videoRef}
+    progressUpdateInterval={100}
+    onLoad={(e) => seekBarRef.current?.setDuration(e.duration)}
+    onProgress={(e) => seekBarRef.current?.setProgress(e.currentTime)}
     source={isVisible ? { uri: p?.media?.[0]?.url || "" } : undefined}
     style={S.video}
     resizeMode="contain"
     repeat
     muted={muted}
-    paused={!isVisible || paused}
+    paused={!isVisible || paused || scrubbing}
   />
 </View>
           <View style={S.overlayGradient} pointerEvents="none" />
@@ -1096,6 +1087,9 @@ const isDownloadingRef = useRef(false);
             </View>
           )}
         </TouchableOpacity>
+
+        {/* SEEK BAR — drag left/right to reverse/forward */}
+        <VideoSeekBar ref={seekBarRef} videoRef={videoRef} onScrubChange={setScrubbing} bottom={0} />
 
         {/* RIGHT ACTIONS */}
         <View style={S.rightActions}>

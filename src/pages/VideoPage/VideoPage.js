@@ -34,6 +34,8 @@ const [myId, setMyId] = useState(null);
   // for) the existing setCommentsOpen(...) pub/sub call, in case Navbar
   // itself does something else with that signal.
   const [sheetOpen, setSheetOpen] = useState(false);
+  // measured height of the Navbar, so Videopost can park its seek bar just above it
+  const [navbarHeight, setNavbarHeight] = useState(0);
 
   // NEW — screen-wide swipe to switch tabs (bubble-phase, so it never
   // steals the vertical drag from the reels FlatList below: the list
@@ -214,13 +216,16 @@ useEffect(() => {
     setCommentsOpen(open);
   }, []);
 
+  // FlatList only re-renders rows when extraData changes by reference
+  const listExtra = React.useMemo(() => ({ visibleVideoIds, navbarHeight }), [visibleVideoIds, navbarHeight]);
+
   return (
     <Animated.View style={styles.container} {...swipePanHandlers}>
 <FlatList
 ref={videoListRef}
 refreshing={refreshing} onRefresh={onRefresh}
   data={feedItems}
-  extraData={visibleVideoIds}
+  extraData={listExtra}
   keyExtractor={(post) => post._id}
   renderItem={({ item }) => item.isAd ? (
     <View style={{ height: SCREEN_HEIGHT, width: "100%" }}>
@@ -231,6 +236,7 @@ refreshing={refreshing} onRefresh={onRefresh}
 <Videopost
   p={item}
   hasNavbar={hasNavbar}
+  navbarHeight={navbarHeight}
   isVisible={visibleVideoIds.has(item._id)}
   onBlock={handleBlock}
   onDeleted={handleDeleted}
@@ -269,6 +275,7 @@ refreshing={refreshing} onRefresh={onRefresh}
             sheetOpen ? styles.navbarWrapHidden : styles.navbarWrapVisible,
           ]}
           pointerEvents={sheetOpen ? "none" : "auto"}
+          onLayout={(e) => setNavbarHeight(Math.round(e.nativeEvent.layout.height))}
         >
           <Navbar />
         </View>
