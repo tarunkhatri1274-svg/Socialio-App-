@@ -24,6 +24,7 @@ import Video from "react-native-video";
 import socket from "../../sockets/Sockets";
 import Navbar, { subscribeTabReload, useSwipeToChangeTab } from "../../components/Navbar/Navbar";
 import StoryViewer from "../../components/StoryBar/StoryViewer";
+import ImageViewerModal from "./ImageViewerModal";
 import MemoriesRow from "../../components/Memories/MemoryRow";
 import MemoryViewer from "../../components/Memories/MemoryViewer";
 import CreateMemoryModal from "../../components/Memories/CreateMemoryModal";
@@ -134,6 +135,7 @@ function Profilepage() {
   const [viewerCommentId, setViewerCommentId] = useState(null);
   const [viewerReplyId, setViewerReplyId] = useState(null);
   const [createModal, setCreateModal] = useState(null);
+  const [imageViewerUri, setImageViewerUri] = useState(null);
 
   const scrollViewRef = useRef(null);
   const itemRefs = useRef({});
@@ -742,7 +744,11 @@ function Profilepage() {
         {/* ── Cover ── */}
         <View style={styles.coverContainer}>
           {user?.coverPic
-            ? <Image source={{ uri: user.coverPic }} style={styles.cover} />
+            ? (
+              <TouchableOpacity activeOpacity={0.9} style={{ width: "100%", height: "100%" }} onPress={() => setImageViewerUri(user.coverPic)}>
+                <Image source={{ uri: user.coverPic }} style={styles.cover} />
+              </TouchableOpacity>
+            )
             : <View style={styles.coverFallback} />
           }
         </View>
@@ -750,7 +756,13 @@ function Profilepage() {
         {/* ── Profile Section ── */}
         <View style={styles.profileSection}>
           {hasStory ? (
-            <TouchableOpacity onPress={() => setShowStoryViewer(true)} style={ownProfileRingWrap}>
+            // Story exists: tap = open story, long press = view profile photo
+            <TouchableOpacity
+              onPress={() => setShowStoryViewer(true)}
+              onLongPress={() => user?.profilePic && setImageViewerUri(user.profilePic)}
+              delayLongPress={350}
+              style={ownProfileRingWrap}
+            >
               <View style={ownProfileRingInner}>
                 {user?.profilePic
                   ? <Image source={{ uri: user.profilePic }} style={ownProfileImgNoBorder} />
@@ -760,7 +772,11 @@ function Profilepage() {
             </TouchableOpacity>
           ) : (
             user?.profilePic
-              ? <Image source={{ uri: user.profilePic }} style={styles.profileImg} />
+              ? (
+                <TouchableOpacity activeOpacity={0.9} onPress={() => setImageViewerUri(user.profilePic)}>
+                  <Image source={{ uri: user.profilePic }} style={styles.profileImg} />
+                </TouchableOpacity>
+              )
               : <View style={styles.profileImgFallback}><Text style={{ fontSize: 32, fontWeight: "700", color: "#fff" }}>{user?.username?.[0]?.toUpperCase()}</Text></View>
           )}
           <View style={styles.profileInfo}>
@@ -850,6 +866,12 @@ function Profilepage() {
       {showStoryViewer && hasStory && (
         <StoryViewer stories={[story]} index={0} close={() => setShowStoryViewer(false)} />
       )}
+
+      <ImageViewerModal
+        visible={!!imageViewerUri}
+        uri={imageViewerUri}
+        onClose={() => setImageViewerUri(null)}
+      />
 
       {viewerGroupId && (
         <MemoryViewer

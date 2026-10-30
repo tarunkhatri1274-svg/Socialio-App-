@@ -31,6 +31,7 @@ import { useBlockedIds, setBlocked } from "../../components/State/BlockStore";
 import MemoriesRow from "../../components/Memories/MemoryRow";
 import MemoryViewer from "../../components/Memories/MemoryViewer";
 import StoryViewer from "../../components/StoryBar/StoryViewer";
+import ImageViewerModal from "./ImageViewerModal";
 import MuteMenu from "./MuteMenu";
 import { ProfileHeaderSkeleton, ProfileGridSkeleton } from "../../components/Skeleton/ProfileSkeleton";
 import { useRefresh, useSwipeTabs } from "../../hooks/useRefreshAndSwipe";
@@ -256,6 +257,7 @@ function UserProfileView() {
 
   const [groups, setGroups] = useState([]);
   const [memoryViewer, setMemoryViewer] = useState(null);
+  const [imageViewerUri, setImageViewerUri] = useState(null);
 
   const scrollViewRef = useRef(null);
   const itemRefs = useRef({});
@@ -726,7 +728,11 @@ function UserProfileView() {
         {/* ── Cover ── */}
         <View style={styles.coverContainer}>
           {user?.coverPic
-            ? <Image source={{ uri: user.coverPic }} style={styles.cover} />
+            ? (
+              <TouchableOpacity activeOpacity={0.9} style={{ width: "100%", height: "100%" }} onPress={() => setImageViewerUri(user.coverPic)}>
+                <Image source={{ uri: user.coverPic }} style={styles.cover} />
+              </TouchableOpacity>
+            )
             : <View style={styles.coverFallback} />
           }
         </View>
@@ -734,7 +740,13 @@ function UserProfileView() {
         {/* ── Profile Row ── */}
         <View style={styles.profileRow}>
           {hasStory ? (
-            <TouchableOpacity onPress={openStoryPreview} style={profileRingWrap(seenStory)}>
+            // Story exists: tap = open story, long press = view profile photo
+            <TouchableOpacity
+              onPress={openStoryPreview}
+              onLongPress={() => user?.profilePic && setImageViewerUri(user.profilePic)}
+              delayLongPress={350}
+              style={profileRingWrap(seenStory)}
+            >
               <View style={profileRingInner}>
                 {user?.profilePic
                   ? <Image source={{ uri: user.profilePic }} style={profileImgNoBorder} />
@@ -744,7 +756,11 @@ function UserProfileView() {
             </TouchableOpacity>
           ) : (
             user?.profilePic
-              ? <Image source={{ uri: user.profilePic }} style={styles.profileImg} />
+              ? (
+                <TouchableOpacity activeOpacity={0.9} onPress={() => setImageViewerUri(user.profilePic)}>
+                  <Image source={{ uri: user.profilePic }} style={styles.profileImg} />
+                </TouchableOpacity>
+              )
               : <View style={styles.profileImgFallback}><Text style={{ fontSize: 32, fontWeight: "700", color: "#fff" }}>{user?.username?.[0]?.toUpperCase()}</Text></View>
           )}
           <View style={styles.info}>
@@ -878,6 +894,12 @@ function UserProfileView() {
           currentUserId={myId}
         />
       )}
+
+      <ImageViewerModal
+        visible={!!imageViewerUri}
+        uri={imageViewerUri}
+        onClose={() => setImageViewerUri(null)}
+      />
 
       {/* ── MEMORY VIEWER OVERLAY (view-only) ── */}
       {memoryViewer && (
