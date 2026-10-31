@@ -436,6 +436,11 @@ useEffect(() => {
           setStatus(type === "video" ? "Video call declined" : "Call declined");
           setTimeout(onEnd, 1500);
         });
+        socket.once("callNoAnswer", () => {
+  if (cancelled) return;
+  setStatus("No answer");
+  setTimeout(onEnd, 1500);
+});
       } catch (err) {
         if (!cancelled) {
           console.error(err);

@@ -260,12 +260,15 @@ useEffect(() => {
     });
 
     // In-app alerts shown by notifee (AlertSound.js) while app is running
-    const unsubNotifee = notifee.onForegroundEvent(({ type }) => {
-      if (type === EventType.PRESS) openNotificationsFromPush();
-    });
-    notifee.getInitialNotification().then((initial) => {
-      if (initial) openNotificationsFromPush();
-    });
+const isCall = (n) => n?.data?.type === 'incoming_call';
+
+const unsubNotifee = notifee.onForegroundEvent(({ type, detail }) => {
+  if (isCall(detail?.notification)) return;
+  if (type === EventType.PRESS) openNotificationsFromPush();
+});
+notifee.getInitialNotification().then((initial) => {
+  if (initial && !isCall(initial.notification)) openNotificationsFromPush();
+});
 
     return () => {
       unsubOpened();
