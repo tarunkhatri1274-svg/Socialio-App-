@@ -302,7 +302,7 @@ export default function FeedStoryPreview({
   const [accessDenied, setAccessDenied] = useState(null);
   const [videoDuration, setVideoDuration] = useState(0); // ms
   const [restartKey, setRestartKey] = useState(0); // bump to restart the current slide's bar
-
+const [isMuted, setIsMuted] = useState(false);
   const slides = story?.slides || [];
   const slide = slides[slideIndex] || {};
   const isOwn = !!story?.isOwn || (currentUserId && story?.id?.toString() === currentUserId);
@@ -654,6 +654,13 @@ export default function FeedStoryPreview({
                 <Text style={{ color: "#fff", fontSize: 11, fontWeight: "700" }}>LIVE</Text>
               </View>
             )}
+
+              {/* mute / unmute button */}
+  {isVideo && !isLiveSlide && (
+    <TouchableOpacity onPress={() => setIsMuted((m) => !m)} style={{ padding: 4 }}>
+      <FeatherIcon name={isMuted ? "volume-x" : "volume-2"} size={18} color="#fff" />
+    </TouchableOpacity>
+  )}
             <TouchableOpacity onPress={onClose} style={{ padding: 4 }}>
               <FeatherIcon name="x" size={18} color="#fff" />
             </TouchableOpacity>
@@ -687,17 +694,19 @@ export default function FeedStoryPreview({
               )
             ) : slide.image ? (
               isVideo ? (
-                <Video
-                  key={slide.image}
-                  source={{ uri: slide.image }}
-                  style={st.mediaEl}
-                  resizeMode="contain"
-                  repeat
-                  muted
-                  paused={barPaused}
-                  onLoad={(d) => setVideoDuration(Math.max(Math.round((d?.duration || 0) * 1000), 1000))}
-                  onError={() => setVideoDuration(IMAGE_STORY_MS)}
-                />
+<Video
+  key={slide.image}
+  source={{ uri: slide.image }}
+  style={st.mediaEl}
+  resizeMode="contain"
+  repeat
+  muted={isMuted}
+  volume={1.0}
+  ignoreSilentSwitch="ignore"
+  paused={barPaused}
+  onLoad={(d) => setVideoDuration(Math.max(Math.round((d?.duration || 0) * 1000), 1000))}
+  onError={() => setVideoDuration(IMAGE_STORY_MS)}
+/>
               ) : (
                 <Image source={{ uri: slide.image }} style={st.mediaEl} resizeMode="contain" />
               )
