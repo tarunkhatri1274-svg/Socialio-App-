@@ -24,20 +24,19 @@ const ResetPassword = () => {
   const navigation = useNavigation();
   const route = useRoute();
 
-  const email = route.params?.email; // ✅ FIX: optional chaining instead of destructuring,
-                                       // so a missing route.params doesn't throw immediately
+ const email = route.params?.email;
+const resetToken = route.params?.resetToken;
 
-  // ✅ FIX: guard against reaching this screen with no email (deep link,
-  // stale nav state, app restored mid-flow, etc.)
-  useEffect(() => {
-    if (!email) {
-      Alert.alert(
-        "Session expired",
-        "Please start the password reset process again."
-      );
-      navigation.replace("ForgotPassword");
-    }
-  }, [email, navigation]);
+
+useEffect(() => {
+  if (!email || !resetToken) {
+    Alert.alert(
+      "Session expired",
+      "Please start the password reset process again."
+    );
+    navigation.replace("ForgotPassword");
+  }
+}, [email, resetToken, navigation]);
 
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -78,6 +77,7 @@ const ResetPassword = () => {
           body: JSON.stringify({
             email,
             newPassword: password,
+            resetToken,
           }),
         }
       );
@@ -111,7 +111,8 @@ const ResetPassword = () => {
   };
 
   // ✅ FIX: don't render the form at all while redirecting away
-  if (!email) {
+  // don't render the form at all while redirecting away
+  if (!email || !resetToken) {
     return null;
   }
 

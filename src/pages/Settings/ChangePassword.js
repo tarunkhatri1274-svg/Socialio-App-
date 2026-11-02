@@ -31,7 +31,7 @@ function ChangePassword() {
   const [isSendingOtp, setIsSendingOtp] = useState(false);
   const [isVerifyingOtp, setIsVerifyingOtp] = useState(false);
   const [isResettingPassword, setIsResettingPassword] = useState(false);
-
+const [resetToken, setResetToken] = useState("");
   const handleChangePassword = async () => {
     if (Newpassword !== confirmPassword) {
       Alert.alert("", "New password and confirm password do not match.");
@@ -109,9 +109,10 @@ function ChangePassword() {
         body: JSON.stringify({ email, otp: String(otp) }),
       });
       const data = await response.json();
-      if (response.ok) {
-        setStep(3);
-      } else {
+if (response.ok) {
+  setResetToken(data.resetToken);
+  setStep(3);
+} else {
         Alert.alert("", data.message);
       }
     } catch (error) {
@@ -123,17 +124,21 @@ function ChangePassword() {
   };
 
   const handleResetPassword = async () => {
-    if (!password) {
-      Alert.alert("", "Please enter a new password");
-      return;
-    }
+if (!password) {
+  Alert.alert("", "Please enter a new password");
+  return;
+}
+if (password.length < 6) {
+  Alert.alert("", "Password must be at least 6 characters");
+  return;
+}
 
     setIsResettingPassword(true);
     try {
       const response = await fetch(`${API}/auth/reset-password`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, newPassword: password }),
+        body: JSON.stringify({ email, newPassword: password,resetToken }),
       });
       const data = await response.json();
 

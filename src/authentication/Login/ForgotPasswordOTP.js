@@ -87,11 +87,12 @@ const ForgotPasswordOtp = () => {
 
       const data = await response.json();
 
-      if (response.ok) {
-        navigation.navigate("ResetPassword", {
-          email,
-        });
-      } else {
+if (response.ok) {
+  navigation.navigate("ResetPassword", {
+    email,
+    resetToken: data.resetToken,
+  });
+} else {
         Alert.alert("Error", data.message);
       }
     } catch (error) {

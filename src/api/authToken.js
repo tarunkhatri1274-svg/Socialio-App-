@@ -69,21 +69,24 @@ export async function forceLogout() {
 
 async function doRefresh() {
   const refreshToken = await getRefreshToken();
-  if (!refreshToken) return null;
+  if (!refreshToken) return { status: "invalid" };
   try {
     const res = await fetch(`${API}/auth/refresh-token`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ refreshToken }),
     });
+    if (res.status === 401 || res.status === 403) return { status: "invalid" };
     const data = await res.json();
     if (data?.success && data?.token) {
       await AsyncStorage.setItem("token", data.token);
       onTokenRefreshed?.(data.token);
-      return data.token;
+      return { status: "ok", token: data.token };
     }
-  } catch {}
-  return null;
+    return { status: "error" };
+  } catch {
+    return { status: "error" }; // offline or server down: keep the session
+  }
 }
 
 /* ============================================================
@@ -103,17 +106,18 @@ export async function apiFetch(url, options = {}) {
 
   let res = await fetch(url, { ...options, headers: buildHeaders(token) });
 
-  if (res.status === 401) {
-    if (!refreshPromise) refreshPromise = doRefresh().finally(() => (refreshPromise = null));
-    const newToken = await refreshPromise;
+if (res.status === 401) {
+  if (!refreshPromise) refreshPromise = doRefresh().finally(() => (refreshPromise = null));
+  const result = await refreshPromise;
 
-    if (newToken) {
-      res = await fetch(url, { ...options, headers: buildHeaders(newToken) });
-    } else {
-      await clearAuthSession();
-      onUnauthorized?.();
-    }
+  if (result.status === "ok") {
+    res = await fetch(url, { ...options, headers: buildHeaders(result.token) });
+  } else if (result.status === "invalid") {
+    await clearAuthSession();
+    onUnauthorized?.();
   }
+  // "error": return the original 401 and let the caller retry later
+}
 
   return res;
 }
