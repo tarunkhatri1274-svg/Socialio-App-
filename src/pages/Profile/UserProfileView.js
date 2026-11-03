@@ -32,6 +32,7 @@ import MemoriesRow from "../../components/Memories/MemoryRow";
 import MemoryViewer from "../../components/Memories/MemoryViewer";
 import StoryViewer from "../../components/StoryBar/StoryViewer";
 import ImageViewerModal from "./ImageViewerModal";
+import LongPressTap from "./LongPressTap";
 import MuteMenu from "./MuteMenu";
 import { ProfileHeaderSkeleton, ProfileGridSkeleton } from "../../components/Skeleton/ProfileSkeleton";
 import { useRefresh, useSwipeTabs } from "../../hooks/useRefreshAndSwipe";
@@ -741,7 +742,7 @@ function UserProfileView() {
         <View style={styles.profileRow}>
           {hasStory ? (
             // Story exists: tap = open story, long press = view profile photo
-            <TouchableOpacity
+            <LongPressTap
               onPress={openStoryPreview}
               onLongPress={() => user?.profilePic && setImageViewerUri(user.profilePic)}
               delayLongPress={350}
@@ -753,7 +754,7 @@ function UserProfileView() {
                   : <View style={profileImgFallbackNoBorder}><Text style={{ fontSize: 30, fontWeight: "700", color: "#fff" }}>{user?.username?.[0]?.toUpperCase()}</Text></View>
                 }
               </View>
-            </TouchableOpacity>
+            </LongPressTap>
           ) : (
             user?.profilePic
               ? (

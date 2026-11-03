@@ -25,6 +25,7 @@ import socket from "../../sockets/Sockets";
 import Navbar, { subscribeTabReload, useSwipeToChangeTab } from "../../components/Navbar/Navbar";
 import StoryViewer from "../../components/StoryBar/StoryViewer";
 import ImageViewerModal from "./ImageViewerModal";
+import LongPressTap from "./LongPressTap";
 import MemoriesRow from "../../components/Memories/MemoryRow";
 import MemoryViewer from "../../components/Memories/MemoryViewer";
 import CreateMemoryModal from "../../components/Memories/CreateMemoryModal";
@@ -757,7 +758,7 @@ function Profilepage() {
         <View style={styles.profileSection}>
           {hasStory ? (
             // Story exists: tap = open story, long press = view profile photo
-            <TouchableOpacity
+            <LongPressTap
               onPress={() => setShowStoryViewer(true)}
               onLongPress={() => user?.profilePic && setImageViewerUri(user.profilePic)}
               delayLongPress={350}
@@ -769,7 +770,7 @@ function Profilepage() {
                   : <View style={ownProfileImgFallbackNoBorder}><Text style={{ fontSize: 32, fontWeight: "700", color: "#fff" }}>{user?.username?.[0]?.toUpperCase()}</Text></View>
                 }
               </View>
-            </TouchableOpacity>
+            </LongPressTap>
           ) : (
             user?.profilePic
               ? (
