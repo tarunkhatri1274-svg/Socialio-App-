@@ -41,7 +41,8 @@ import Navbar, { subscribeTabReload, useSwipeToChangeTab } from "../../component
 // HomePage.js, so a story notification opens immediately without a
 // visible stop on the home screen first.
 import StoryViewer from "../../components/StoryBar/StoryViewer";
-import { AnimatedView } from "react-native-reanimated/lib/typescript/component/View";
+import ReanimatedView from "react-native-reanimated";
+const AnimatedView = ReanimatedView.View;
 
 const API = Config.API_URL;
 
