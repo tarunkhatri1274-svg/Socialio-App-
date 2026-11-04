@@ -89,3 +89,7 @@ yarn-error.log
 # Android signing keys
 *.jks
 *.keystore
+# Expo
+.expo
+dist/
+web-build/
