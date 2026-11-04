@@ -11,9 +11,10 @@
   },
   "owner": "tarun1274",
   "runtimeVersion": "1.0.0",
-  "updates": {
-    "url": "https://u.expo.dev/ad2f91c8-a83c-4281-a8ec-4b03db8fba34"
-  },
+"updates": {
+  "url": "https://u.expo.dev/ad2f91c8-a83c-4281-a8ec-4b03db8fba34",
+  "requestHeaders": { "expo-channel-name": "production" }
+},
   "android": {},
   "ios": {}
 }

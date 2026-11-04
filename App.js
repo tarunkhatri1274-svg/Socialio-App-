@@ -5,9 +5,12 @@
  * @format
  */
 
+
 import React, { useEffect, useState } from 'react';
-import { StatusBar, useColorScheme } from 'react-native';
+import { StatusBar, useColorScheme, Alert } from 'react-native';
+import * as Updates from 'expo-updates';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -221,6 +224,20 @@ useEffect(() => {
   // refresh-token retry can't fix, it clears AsyncStorage and calls
   // this — so we sync AuthContext's state and kick the user back to
   // Login, no matter which screen they were on.
+  useEffect(() => {
+    (async () => {
+      try {
+        if (__DEV__) return;
+        const res = await Updates.checkForUpdateAsync();
+        if (res.isAvailable) {
+          await Updates.fetchUpdateAsync();
+          await Updates.reloadAsync();
+        }
+      } catch (e) {
+        console.log('[ota] error', e?.message);
+      }
+    })();
+  }, []);
   useEffect(() => {
     setUnauthorizedHandler(async () => {
       await refreshAuth(); // AuthContext now reflects the cleared session
