@@ -1,9 +1,19 @@
-
 {
   "name": "Socialio",
   "displayName": "Socialio",
   "react-native-google-mobile-ads": {
     "android_app_id": "ca-app-pub-3940256099942544~3347511713"
-  }
+  },
+  "extra": {
+    "eas": {
+      "projectId": "ad2f91c8-a83c-4281-a8ec-4b03db8fba34"
+    }
+  },
+  "owner": "tarun1274",
+  "runtimeVersion": "1.0.0",
+  "updates": {
+    "url": "https://u.expo.dev/ad2f91c8-a83c-4281-a8ec-4b03db8fba34"
+  },
+  "android": {},
+  "ios": {}
 }
-
