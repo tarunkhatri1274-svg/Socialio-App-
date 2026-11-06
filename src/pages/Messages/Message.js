@@ -24,6 +24,7 @@ import {
 import { useBlockedIds, subscribeBlocked, loadBlockedStore } from "../../components/State/BlockStore";
 import Video from "react-native-video";
 import ReactNativeBlobUtil from "react-native-blob-util";
+import { saveMediaToGallery } from "../../utils/saveToGallery";
 import { fetchWallpaper, saveWallpaper, uploadWallpaperPhoto, clearWallpaperOnServer } from "./WallpaperAPI"; // adjust path to where you place the file
 import { useNavigation, useFocusEffect, useRoute } from "@react-navigation/native";
 import { launchImageLibrary } from "react-native-image-picker";
@@ -414,6 +415,20 @@ async function downloadFileToDevice(url, fileName) {
     const safeName = (fileName || "download").replace(/[\\/:*?"<>|]/g, "_");
     const ext = (safeName.split(".").pop() || "").toLowerCase();
     const mime = MIME_TYPES[ext] || "application/octet-stream";
+    // Photos & videos go to the gallery album "Socialio" (same as post downloads)
+    const isGalleryImage = /^(jpe?g|png|gif|webp)$/.test(ext);
+    const isGalleryVideo = /^(mp4|mov|m4v)$/.test(ext);
+    if (isGalleryImage || isGalleryVideo) {
+      await saveMediaToGallery(url, {
+        isVideo: isGalleryVideo,
+        ext,
+        name: `socialio_${Date.now()}`,
+      });
+      if (Platform.OS === "android") ToastAndroid.show("Saved to gallery (Socialio)", ToastAndroid.SHORT);
+      else Alert.alert("Saved", "Saved to your gallery.");
+      return;
+    }
+
     const { dirs } = ReactNativeBlobUtil.fs;
 
     // 1) Download into the app cache
