@@ -3,7 +3,7 @@ import Config from 'react-native-config';
 
 // Keep true while developing. Set to false only for the Play Store release build.
 // Debug builds show test ads. Release builds show real ads automatically.
-export const USE_TEST_ADS = __DEV__;
+export const USE_TEST_ADS = true;
 
 // AdMob test IDs for Native Advanced (image) and Native Advanced Video.
 // Read from .env (TEST_NATIVE_IMAGE / TEST_NATIVE_VIDEO); the Google test
