@@ -2,7 +2,7 @@
   "name": "Socialio",
   "displayName": "Socialio",
   "react-native-google-mobile-ads": {
-    "android_app_id": "ca-app-pub-3940256099942544~3347511713"
+    "android_app_id": "ca-app-pub-4788091331448914~5585458963"
   },
   "extra": {
     "eas": {
@@ -10,7 +10,7 @@
     }
   },
   "owner": "tarun1274",
-  "runtimeVersion": "1.0.0",
+  "runtimeVersion": "1.0.1",
 "updates": {
   "url": "https://u.expo.dev/ad2f91c8-a83c-4281-a8ec-4b03db8fba34",
   "requestHeaders": { "expo-channel-name": "production" }
