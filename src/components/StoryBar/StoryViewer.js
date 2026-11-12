@@ -35,31 +35,13 @@ import {
 } from "../State/SyncStoryStore";
 import SocialioVideoAd from "../Ads/SocialioVideoAd";
 import { AD_UNIT_IDS } from "../Ads/AdConfig";
-
+import { timeAgo as formatTimeAgo } from "../../utils/timeAgo";
 const API = Config.API_URL;
 // An image/video ad is shown after every N stories (authors) in the viewer.
 const STORIES_PER_AD = 2;
 const GOLDEN = "rgb(234,182,118)";
 const { height: SCREEN_H, width: SCREEN_W } = Dimensions.get("window");
 
-
-function formatTimeAgo(dateInput) {
-  if (!dateInput) return "";
-  const date = new Date(dateInput);
-  if (Number.isNaN(date.getTime())) return "";
-
-  const seconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000));
-  if (seconds < 60) return "Just now";
-
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
-}
 
 function formatCount(num) {
   const n = Number(num) || 0;

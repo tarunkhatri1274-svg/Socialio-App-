@@ -39,6 +39,7 @@ import { BottomSheet, LikesSheet } from "../../components/PostCard/BottomSheet";
 import SocialioNativeAd from '../../components/Ads/SocialioNativeAd';
 import { useNavigation, useIsFocused, useFocusEffect } from "@react-navigation/native";
 import { carouselTouchProps } from "../../components/carouselTouch";
+import TextPostVideo from "../../components/PostCard/TextPostVideo";
 import { saveMediaToGallery } from "../../utils/saveToGallery";
 // These sibling files come from your project — convert/point them at their
 // RN versions. They're not included in this conversion since they weren't provided.
@@ -62,7 +63,8 @@ import {
   toggleSavedPost,
   subscribeSavedPosts,
 } from "../../components/State/SavedPostStore";
-   import { useCarouselHeight } from "../../components/PostCard/PostImage";
+import { timeAgo } from "../../utils/timeAgo";
+import { useCarouselHeight } from "../../components/PostCard/PostImage";
 const API = Config.API_URL;
 const SCREEN_WIDTH = Dimensions.get("window").width;
 // FIX: needed to size the bottom sheet with a real height instead of only
@@ -128,16 +130,7 @@ function formatCount(num) {
   return format(n / 1_000_000_000, "b");
 }
 
-function timeAgo(createdAt) {
-  if (!createdAt) return "";
-  const diff = Date.now() - new Date(createdAt).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return "now";
-  if (mins < 60) return `${mins}m`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h`;
-  return `${Math.floor(hrs / 24)}d`;
-}
+
 
 const INTERACTED_KEY = "interactedPostIds";
 async function markPostInteracted(postId) {
@@ -1020,7 +1013,7 @@ const isDownloadingRef = useRef(false);
           </TouchableOpacity>
           {canDownload && (
             <TouchableOpacity onPress={download} style={styles.imgActionBtn}>
-              <Icon name="download" size={16} color="#555" />
+              <FeatherIcon name="download" size={19} color="#555" />
               {downloadCount > 0 && (
                 <Text style={{ fontSize: 13, fontWeight: "600", color: "#555" }}>{formatCount(downloadCount)}</Text>
               )}
@@ -1403,7 +1396,7 @@ const isDownloadingRef = useRef(false);
           </TouchableOpacity>
           {canDownload && (
             <TouchableOpacity onPress={download} style={styles.imgActionBtn}>
-              <Icon name="download" size={16} color="#555" />
+              <FeatherIcon name="download" size={19} color="#555" />
               {downloadCount > 0 && (
                 <Text style={{ fontSize: 13, fontWeight: "600", color: "#555" }}>{formatCount(downloadCount)}</Text>
               )}
@@ -1444,6 +1437,7 @@ function TextFeedCard({
   onInteract,
   onOpenStory,
   onSheetOpen,
+  isVisible,
 }) {
   const { user: currentUser } = useAuth();
   const currentUserId = (currentUser?._id || currentUser?.id)?.toString();
@@ -1688,7 +1682,18 @@ function TextFeedCard({
       showsHorizontalScrollIndicator={false}
       {...carouselTouchProps}
     >
-      {p.media.map((m, i) => (
+      {p.media.map((m, i) => m.type === "video" ? (
+        <TextPostVideo
+          key={i}
+          post={p}
+          media={m}
+          width={p.media.length === 1 ? SCREEN_WIDTH - 24 : 220}
+          height={220}
+          isOwner={isOwner}
+          isVisible={isVisible}
+          onPress={handleMediaTap}
+        />
+      ) : (
         <TouchableOpacity key={i} activeOpacity={1} onPress={handleMediaTap}>
           <Image
             source={{ uri: m.url }}
@@ -1719,7 +1724,7 @@ function TextFeedCard({
           <FeedTagsRow tags={p?.tags} navigation={navigation} />
           <FeedCollabRow collaborators={collaborators} navigation={navigation} />
 
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 10, paddingBottom: 4 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 18, marginTop: 10, paddingBottom: 4 }}>
             <ReactionButton myReaction={myReaction} onQuickPress={quickToggle} onReact={react} style={styles.textActionBtn}>
               <ReactionIcon reaction={myReaction} size={16} inactiveColor={"#555"} />
               {(!hideLikeCount || isOwner) && (
@@ -1742,7 +1747,7 @@ function TextFeedCard({
             </TouchableOpacity>
             <TouchableOpacity
               onPress={toggleSave}
-              style={[styles.textActionBtn, { flex: 0, width: 44, marginLeft: "auto", backgroundColor: saved ? "#fff8e1" : "#efefef" }]}
+              style={[styles.textActionBtn, { marginLeft: "auto" }]}
             >
               <Icon name="bookmark" solid={saved} size={14} color={saved ? "#f5a623" : "#555"} />
             </TouchableOpacity>
@@ -1870,6 +1875,7 @@ const [mutedMap, setMutedMap] = useState(() => getMutedMap());
 
         grouped.get(sAuthorId).slides.push({
           id: s._id,
+          createdAt: s.createdAt,
           image: s.media?.url || "",
           type: s.media?.type || s.storyType,
           likes: s.likesCount || 0,
@@ -2179,7 +2185,11 @@ const followingStories = useMemo(
   const onViewableItemsChanged = useRef(({ viewableItems }) => {
     const ids = new Set(
       viewableItems
-        .filter((v) => v.item?.type === "post" && v.item.post?.postType === "video")
+        .filter((v) => {
+          const post = v.item?.type === "post" ? v.item.post : null;
+          if (!post) return false;
+          return post.postType === "video" || (post.postType === "text" && post.media?.some((m) => m.type === "video"));
+        })
         .map((v) => v.item.post._id)
     );
     setVisibleVideoIds(ids);
@@ -2211,7 +2221,7 @@ const followingStories = useMemo(
       if (p?.postType === "image" || p?.postType === "carousel") return <MemoImageFeedCard {...props} />;
       if (p?.postType === "video")
         return <MemoVideoFeedCard {...props} isVisible={visibleVideoIds.has(p._id)} />;
-      if (p?.postType === "text") return <MemoTextFeedCard {...props} />;
+      if (p?.postType === "text") return <MemoTextFeedCard {...props} isVisible={visibleVideoIds.has(p._id)} />;
       return null;
     },
     [
@@ -2377,31 +2387,13 @@ const styles = {
   caption: { paddingHorizontal: 12, paddingTop: 8, paddingBottom: 4, fontSize: 14, lineHeight: 20 },
   moreBtn: { color: "#8e8e8e", fontWeight: "700" },
   likesSummary: { paddingHorizontal: 12, paddingTop: 2, fontSize: 13, color: "#333" },
-  imgActions: { flexDirection: "row", alignItems: "center", paddingVertical: 8, paddingHorizontal: 10, gap: 8 },
-  imgActionBtn: {
-    flex: 1,
-    height: 40,
-    borderRadius: 10,
-    backgroundColor: "#efefef",
-    alignItems: "center",
-    justifyContent: "center",
-    flexDirection: "row",
-    gap: 6,
-  },
+  imgActions: { flexDirection: "row", alignItems: "center", paddingVertical: 8, paddingHorizontal: 12, gap: 18 },
+  imgActionBtn: { height: 40, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 6 },
 
   textCard: { backgroundColor: "#fff", borderBottomWidth: 1, borderBottomColor: "#efefef", paddingTop: 14, paddingHorizontal: 12, paddingBottom: 4 },
   textCardBody: { fontSize: 15, lineHeight: 22, color: "#111", marginTop: 4 },
   textMenuBtn: { padding: 6, borderRadius: 8 },
-  textActionBtn: {
-    height: 38,
-    flex: 1,
-    borderRadius: 10,
-    backgroundColor: "#efefef",
-    alignItems: "center",
-    justifyContent: "center",
-    flexDirection: "row",
-    gap: 5,
-  },
+  textActionBtn: { height: 38, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 5 },
   textCount: { fontSize: 13, color: "#555", fontWeight: "600" },
 
   centered: { alignItems: "center", justifyContent: "center", padding: 60 },

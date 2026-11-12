@@ -20,26 +20,10 @@ import { playAlertSound } from "./AlertSound"; // adjust path
 import { useRefresh, useSwipeTabs } from "../../hooks/useRefreshAndSwipe";
 
 import socket from "../../sockets/Sockets";
+import { timeAgo } from "../../utils/timeAgo";
 
-// ← NEW — same story-handoff mechanism Homepage.js exports
-// (pendingOpenStoryUserId / setPendingOpenStoryUserId). Adjust this path
-// to wherever your Home screen actually lives — this MUST point at the
-// same module Homepage.js's setter comes from, or the two screens will
-// each be talking to their own separate in-memory variable and the
-// handoff will silently do nothing.
-// ← This screen no longer needs anything from HomePage.js's pending-open
-// module flags — StoryViewer is opened directly here now (see
-// directStory below), with initialStoryId/initialShowViewers passed as
-// plain props instead.
-
-// NEW — Navbar wasn't rendered on this screen at all (that's why it was
-// missing), plus the shared screen-wide swipe hook and the "tap the
-// active tab to reload" bus.
 import Navbar, { subscribeTabReload, useSwipeToChangeTab } from "../../components/Navbar/Navbar";
-// ← NEW — StoryViewer is rendered directly on this screen now (see
-// handleOpenStory/directStory below) instead of handing off through
-// HomePage.js, so a story notification opens immediately without a
-// visible stop on the home screen first.
+
 import StoryViewer from "../../components/StoryBar/StoryViewer";
 import ReanimatedView from "react-native-reanimated";
 const AnimatedView = ReanimatedView.View;
@@ -229,16 +213,7 @@ function NotifTypeIcon({ type }) {
   }
 }
 
-const timeAgo = (dateStr) => {
-  const diffMs = Date.now() - new Date(dateStr).getTime();
-  const mins = Math.floor(diffMs / 60000);
-  if (mins < 1) return "now";
-  if (mins < 60) return `${mins}m`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h`;
-  const days = Math.floor(hrs / 24);
-  return `${days}d`;
-};
+
 
 /* ─────────────────────────── notification → navigation target ─────────────────────────── */
 // Maps a postType to the RN screen+params it should open. story_view /
@@ -827,6 +802,7 @@ const handleNewNotification = (notif) => {
 
       const slides = stories.map((s) => ({
         id: s._id,
+        createdAt: s.createdAt,
         image: s.media?.url || "",
         type: s.media?.type || s.storyType,
         likes: s.likesCount || 0,

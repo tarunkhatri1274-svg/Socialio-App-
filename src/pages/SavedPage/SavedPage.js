@@ -10,14 +10,19 @@ import {
   findNodeHandle,
   FlatList,
   PanResponder,
-  Animated
+  Animated,
+  RefreshControl
 } from "react-native";
-import { useSwipeTabs } from "../../hooks/useRefreshAndSwipe";
+import Config from "react-native-config";
+import { useSwipeTabs, useRefresh } from "../../hooks/useRefreshAndSwipe";
 import Video from "react-native-video";
 import FeatherIcon from "react-native-vector-icons/Feather";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import { toggleSavedPost } from "../../components/State/SavedPostStore";
+import { apiFetch } from "../../api/authToken";
+
+const API = Config.API_URL;
 // ── Tab order used for horizontal swipe navigation ──────────────────────────
 const SAVED_TAB_ORDER = ["posts", "videos", "texts"];
 const SWIPE_HORIZONTAL_THRESHOLD = 12; // px moved before we commit to a horizontal gesture
@@ -76,8 +81,48 @@ const tabSwipe = useSwipeTabs({ order: SAVED_TAB_ORDER, activeTab, setActiveTab 
     }
   }, []);
 
+  // Saved items are snapshots taken at save time, so they can go stale
+  // (e.g. a text post saved before its video was typed as "video"). Re-fetch
+  // each one from the server, keep the old snapshot if a fetch fails, and
+  // drop posts the server says no longer exist (404).
+  const refreshFromServer = useCallback(async () => {
+    try {
+      const rawPosts = await AsyncStorage.getItem("savedPosts");
+      const rawVideos = await AsyncStorage.getItem("savedVideos");
+      const posts = rawPosts ? JSON.parse(rawPosts) : [];
+      const videos = rawVideos ? JSON.parse(rawVideos) : [];
+
+      const refetch = async (old) => {
+        try {
+          const res = await apiFetch(`${API}/auth/get-post/${old._id}`);
+          if (res.status === 404) return null;
+          const data = await res.json();
+          if (res.ok && data?.success && data.post) return { ...old, ...data.post };
+        } catch {}
+        return old;
+      };
+
+      const [freshPosts, freshVideos] = await Promise.all([
+        Promise.all(posts.map(refetch)),
+        Promise.all(videos.map(refetch)),
+      ]);
+      const np = freshPosts.filter(Boolean);
+      const nv = freshVideos.filter(Boolean);
+
+      await AsyncStorage.setItem("savedPosts", JSON.stringify(np));
+      await AsyncStorage.setItem("savedVideos", JSON.stringify(nv));
+      setSavedPosts(np.filter((p) => p.postType === "image" || p.postType === "carousel"));
+      setSavedTexts(np.filter((p) => p.postType === "text"));
+      setSavedVideos(nv);
+    } catch (err) {
+      console.log("Failed to refresh saved items:", err.message);
+    }
+  }, []);
+
+  const { refreshing, onRefresh } = useRefresh(refreshFromServer);
+
   useEffect(() => {
-    loadFromStorage(); // always fresh on mount
+    loadFromStorage().then(() => refreshFromServer()); // show cache instantly, then update quietly
 
     const savedSub = DeviceEventEmitter.addListener("postSaved", ({ post }) => {
       if (!post) return;
@@ -104,7 +149,7 @@ const tabSwipe = useSwipeTabs({ order: SAVED_TAB_ORDER, activeTab, setActiveTab 
       savedSub.remove();
       unsavedSub.remove();
     };
-  }, [loadFromStorage]);
+  }, [loadFromStorage, refreshFromServer]);
 
   // ── Restore tab + scroll-target id whenever this screen regains focus —
   // covers both "screen was popped back to" (still mounted underneath) and
@@ -235,7 +280,18 @@ const handleUnsave = (post) => {
       {/* Content */}
 <View style={{ flex: 1, overflow: "hidden" }} {...tabSwipe.panHandlers}>
   <Animated.View style={{ flex: 1, transform: [{ translateX: tabSwipe.x }] }}>
-    <ScrollView ref={scrollViewRef} style={{ flex: 1 }}>
+    <ScrollView
+      ref={scrollViewRef}
+      style={{ flex: 1 }}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          tintColor="rgb(234,182,118)"
+          colors={["rgb(234,182,118)"]}
+        />
+      }
+    >
       {activeTab === "posts" && (
         <PostsGrid posts={savedPosts} onPress={goToPost} onUnsave={handleUnsave} itemRefs={itemRefs} />
       )}
@@ -321,10 +377,10 @@ function getVideoThumbnail(video) {
   return cloudinaryVideoThumbnail(video?.media?.[0]?.url || video?.url);
 }
 
-function VideoGridThumb({ video, style }) {
+function VideoGridThumb({ video, style, resizeMode = "cover" }) {
   const thumbUri = getVideoThumbnail(video);
   if (thumbUri) {
-    return <Image source={{ uri: thumbUri }} style={style} resizeMode="cover" />;
+    return <Image source={{ uri: thumbUri }} style={style} resizeMode={resizeMode} />;
   }
   // Neither an explicit thumbnail nor a derivable Cloudinary frame —
   // fall back to a real (muted/paused) video render. useTextureView
@@ -336,7 +392,7 @@ function VideoGridThumb({ video, style }) {
       style={style}
       muted
       paused
-      resizeMode="cover"
+      resizeMode={resizeMode}
       useTextureView
     />
   );
@@ -422,18 +478,23 @@ function TextList({ texts, onPress, onUnsave, itemRefs }) {
 
           {post?.media?.length > 0 && (
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ paddingHorizontal: 12, paddingBottom: 12 }}>
-              {post.media.map((m, i) => (
-                <Image
-                  key={i}
-                  source={{ uri: m.url }}
-                  style={{
-                    width: post.media.length === 1 ? 260 : 160,
-                    height: 160,
-                    borderRadius: 10,
-                    marginRight: 6,
-                  }}
-                />
-              ))}
+              {post.media.map((m, i) => {
+                const w = post.media.length === 1 ? 260 : 160;
+                return m.type === "video" ? (
+                  <View key={i} style={{ width: w, height: 160, borderRadius: 10, marginRight: 6, overflow: "hidden", backgroundColor: "#000" }}>
+                    <VideoGridThumb video={{ media: [m] }} style={{ width: "100%", height: "100%" }} resizeMode="contain" />
+                    <View style={{ position: "absolute", right: 8, bottom: 8, width: 26, height: 26, borderRadius: 13, backgroundColor: "rgba(0,0,0,0.55)", alignItems: "center", justifyContent: "center" }}>
+                      <FeatherIcon name="play" size={12} color="#fff" />
+                    </View>
+                  </View>
+                ) : (
+                  <Image
+                    key={i}
+                    source={{ uri: m.url }}
+                    style={{ width: w, height: 160, borderRadius: 10, marginRight: 6 }}
+                  />
+                );
+              })}
             </ScrollView>
           )}
         </TouchableOpacity>

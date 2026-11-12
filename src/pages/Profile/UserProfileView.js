@@ -150,10 +150,10 @@ function getVideoThumbnail(video) {
   return cloudinaryVideoThumbnail(video?.media?.[0]?.url || video?.url);
 }
 
-function VideoGridThumb({ video, style }) {
+function VideoGridThumb({ video, style, resizeMode = "cover" }) {
   const thumbUri = getVideoThumbnail(video);
   if (thumbUri) {
-    return <Image source={{ uri: thumbUri }} style={style} resizeMode="cover" />;
+    return <Image source={{ uri: thumbUri }} style={style} resizeMode={resizeMode} />;
   }
   return (
     <Video
@@ -161,7 +161,7 @@ function VideoGridThumb({ video, style }) {
       style={style}
       muted
       paused
-      resizeMode="cover"
+      resizeMode={resizeMode}
       useTextureView
     />
   );
@@ -324,6 +324,7 @@ function UserProfileView() {
         isOwn: false,
         slides: data.stories.map((s) => ({
           id: s._id,
+          createdAt: s.createdAt,
           image: s.media?.url || "",
           type: s.media?.type || s.storyType,
           likes: s.likesCount || 0,
@@ -1035,13 +1036,23 @@ const TextPosts = ({ posts, navigation, userId, itemRefs }) => {
 
           {post?.media?.length > 0 && (
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ paddingHorizontal: 12, paddingBottom: 12 }}>
-              {post.media.map((m, i) => (
-                <Image
-                  key={i}
-                  source={{ uri: m.url }}
-                  style={{ width: post.media.length === 1 ? 300 : 160, height: 160, borderRadius: 10, marginRight: 6 }}
-                />
-              ))}
+              {post.media.map((m, i) => {
+                const w = post.media.length === 1 ? 300 : 160;
+                return m.type === "video" ? (
+                  <View key={i} style={{ width: w, height: 160, borderRadius: 10, marginRight: 6, overflow: "hidden", backgroundColor: "#000" }}>
+                    <VideoGridThumb video={{ media: [m] }} style={{ width: "100%", height: "100%" }} resizeMode="contain" />
+                    <View style={{ position: "absolute", right: 8, bottom: 8, width: 26, height: 26, borderRadius: 13, backgroundColor: "rgba(0,0,0,0.55)", alignItems: "center", justifyContent: "center" }}>
+                      <FA5Icon name="play" solid size={10} color="#fff" />
+                    </View>
+                  </View>
+                ) : (
+                  <Image
+                    key={i}
+                    source={{ uri: m.url }}
+                    style={{ width: w, height: 160, borderRadius: 10, marginRight: 6 }}
+                  />
+                );
+              })}
             </ScrollView>
           )}
         </TouchableOpacity>

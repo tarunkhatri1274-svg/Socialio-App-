@@ -40,6 +40,7 @@ import { isPostSaved, toggleSavedPost, subscribeSavedPosts } from "../State/Save
 import { carouselTouchProps } from "../../components/carouselTouch";
 import { useCarouselHeight } from "./PostImage";
 import { saveMediaToGallery } from "../../utils/saveToGallery";
+import { timeAgo } from "../../utils/timeAgo";
 const API = Config.API_URL;
 const SCREEN_WIDTH = Dimensions.get("window").width;
 const SCREEN_HEIGHT = Dimensions.get("window").height;
@@ -54,18 +55,7 @@ function confirmAsync(message, title = "Confirm") {
   });
 }
 
-function timeAgo(d) {
-  if (!d) return "";
-  const diff = Date.now() - new Date(d).getTime();
-  const m = Math.floor(diff / 60000);
-  if (m < 1) return "now";
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h`;
-  const days = Math.floor(h / 24);
-  if (days < 7) return `${days}d`;
-  return new Date(d).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
-}
+
 
 function formatCount(num) {
   const n = Number(num) || 0;
@@ -1009,7 +999,7 @@ const onCollabResponded = ({ postId }) => {
 
         <View style={styles.actions}>
           <ReactionButton myReaction={myReaction} onQuickPress={quickToggle} onReact={react} style={styles.actionBtn}>
-            <ReactionIcon reaction={myReaction} size={16} inactiveColor={"#666"} />
+            <ReactionIcon reaction={myReaction} size={20} inactiveColor={"#666"} />
             {(!hideLikeCount || isOwner) && (
               <Text onPress={() => setShowLikers(true)} style={styles.likesCountText}>
                 {formatCount(likesCount)}
@@ -1018,19 +1008,19 @@ const onCollabResponded = ({ postId }) => {
           </ReactionButton>
           {canComment && (
             <TouchableOpacity onPress={() => setShowComments(true)} style={styles.actionBtn}>
-              <Icon name="comment" size={16} color="#666" />
+              <Icon name="comment" size={19} color="#666" />
               {(!hideCommentCount || isOwner) && comments.length > 0 && (
                 <Text style={styles.likesCountText}>{formatCount(comments.length)}</Text>
               )}
             </TouchableOpacity>
           )}
           <TouchableOpacity onPress={() => { menu.close(); setShowShare(true); }} style={styles.actionBtn}>
-            <Icon name="paper-plane" size={16} color="#666" />
+            <Icon name="paper-plane" size={18} color="#666" />
             {sharesCount > 0 && <Text style={styles.likesCountText}>{formatCount(sharesCount)}</Text>}
           </TouchableOpacity>
           {canDownload && (
             <TouchableOpacity onPress={download} style={styles.actionBtn}>
-              <Icon name="download" size={16} color="#666" />
+              <FeatherIcon name="download" size={20} color="#666" />
               {downloadsCount > 0 && <Text style={styles.likesCountText}>{formatCount(downloadsCount)}</Text>}
             </TouchableOpacity>
           )}
@@ -1054,6 +1044,7 @@ const onCollabResponded = ({ postId }) => {
         )}
         <TagsRow tags={tags} postId={p._id} isOwner={isOwner} onTagsUpdate={setTags} />
         <CollabRow collaborators={collaborators} postId={p._id} isOwner={isOwner} onCollabUpdate={setCollaborators} />
+        <Text style={styles.postTime}>{timeAgo(p?.createdAt)}</Text>
       </View>
 
       {showLikers && (
@@ -1389,8 +1380,8 @@ const styles = StyleSheet.create({
   dot: { height: 6, borderRadius: 3 },
   counterWrap: { position: "absolute", top: 10, right: 10, backgroundColor: "rgba(0,0,0,0.5)", borderRadius: 20, paddingHorizontal: 10, paddingVertical: 2 },
 
-  actions: { flexDirection: "row", gap: 8, paddingHorizontal: 12, paddingTop: 10, paddingBottom: 4 },
-  actionBtn: { flex: 1, height: 42, borderRadius: 10, backgroundColor: "#ebebeb", alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 6 },
+  actions: { flexDirection: "row", alignItems: "center", gap: 18, paddingHorizontal: 12, paddingTop: 10, paddingBottom: 4 },
+  actionBtn: { height: 40, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 6 },
   likesCountText: { fontSize: 13, fontWeight: "600", color: "#444" },
   mutualLikes: { paddingHorizontal: 12, paddingTop: 2, fontSize: 13, color: "#333" },
   caption: { paddingHorizontal: 12, paddingTop: 6, paddingBottom: 14, fontSize: 14, lineHeight: 21, color: "#222" },
@@ -1428,4 +1419,5 @@ sheetCloseIcon: { position: "absolute", right: 16, top: 12, padding: 4 },
   commentInputBar: { flexDirection: "row", alignItems: "center", borderTopWidth: 1, borderTopColor: "#f0f0f0", paddingVertical: 10, paddingHorizontal: 12, gap: 8 },
 
   centered: { flex: 1, alignItems: "center", justifyContent: "center", marginTop: 40 },
+  postTime: { paddingHorizontal: 12, paddingBottom: 12, fontSize: 12, color: "#999" },
 });

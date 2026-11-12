@@ -29,8 +29,10 @@ import { useNavigation, useRoute } from "@react-navigation/native";
 import socket, { joinPostRoom, leavePostRoom } from "../../sockets/Sockets";
 import CommentSection from "./CommentSection";
 import ShareSheet from "./ShareSheet";
+import TextPostVideo from "./TextPostVideo";
 import { isPostSaved, toggleSavedPost, subscribeSavedPosts } from "../State/SavedPostStore";
 import { carouselTouchProps } from "../../components/carouselTouch";
+import { timeAgo } from "../../utils/timeAgo";
 const API = Config.API_URL;
 // FIX: this file never imported/measured screen dimensions at all, so
 // there was nothing to size the sheet against. Added the same
@@ -48,16 +50,7 @@ function confirmAsync(message, title = "Confirm") {
   });
 }
 
-function timeAgo(createdAt) {
-  if (!createdAt) return "now";
-  const diff = Date.now() - new Date(createdAt).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return "now";
-  if (mins < 60) return `${mins}m`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h`;
-  return `${Math.floor(hrs / 24)}d`;
-}
+
 
 function formatCount(num) {
   const n = Number(num) || 0;
@@ -902,7 +895,17 @@ const goToProfile = (id) => {
       style={{ marginTop: 10 }}
       {...carouselTouchProps}
     >
-      {post.media.map((m, i) => (
+      {post.media.map((m, i) => m.type === "video" ? (
+        <TextPostVideo
+          key={i}
+          post={post}
+          media={m}
+          width={post.media.length === 1 ? 280 : 240}
+          height={240}
+          isOwner={isOwner}
+          onPress={handleBodyTap}
+        />
+      ) : (
         <TouchableOpacity
           key={i}
           activeOpacity={1}
@@ -966,7 +969,7 @@ const goToProfile = (id) => {
 
             <TouchableOpacity
               onPress={toggleSave}
-              style={[styles.actionBtn, { flex: 0, width: 48, backgroundColor: saved ? "#fff8e1" : "#efefef" }]}
+              style={[styles.actionBtn, { marginLeft: "auto" }]}
             >
               <Icon name="bookmark" solid={saved} size={18} color={saved ? "#f5a623" : "#555"} />
             </TouchableOpacity>
@@ -1196,8 +1199,8 @@ const styles = StyleSheet.create({
   collabResults: { backgroundColor: "#fff", borderWidth: 1, borderColor: "#eee", borderRadius: 10, marginTop: 4, overflow: "hidden" },
   collabResultRow: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 12, paddingVertical: 8, borderBottomWidth: 0.5, borderBottomColor: "#f5f5f5" },
 
-  actionsRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 6, paddingBottom: 14 },
-  actionBtn: { flex: 1, height: 40, borderRadius: 10, backgroundColor: "#c8c8c8", alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 6 },
+  actionsRow: { flexDirection: "row", alignItems: "center", gap: 18, marginTop: 6, paddingBottom: 14 },
+  actionBtn: { height: 40, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 6 },
   countText: { fontSize: 14, color: "#555", fontWeight: "600" },
 
   // FIX ("mini update" — sheets opening on too small an area of the

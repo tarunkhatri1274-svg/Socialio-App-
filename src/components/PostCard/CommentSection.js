@@ -4,7 +4,7 @@ import Icon from "react-native-vector-icons/FontAwesome5";
 import Config from "react-native-config";
 import socket from "../../sockets/Sockets";
 import { apiFetch } from "../../api/authToken"; // adjust relative path — count folders to src/api/authToken.js
-
+import { timeAgo } from "../../utils/timeAgo";
 const API = Config.API_URL;
 // Height of the comment list inside a sheet (sheet is ~72% of screen; the
 // rest is handle, title row and input bar). Tune the 190 if it looks off.
@@ -604,6 +604,7 @@ if (creatingPoll) {
                 <View style={styles.commentBox}>
                   <View style={styles.commentHeader}>
                     <Text style={styles.commentUsername}>{comment.user?.username}</Text>
+                    <Text style={styles.commentTime}>{timeAgo(comment.createdAt)}</Text>
                     {comment.isEdited && <Text style={styles.editedTag}>edited</Text>}
                     {comment.isPinned && (
                       <View style={pollStyles.pinnedTag}>
@@ -723,10 +724,11 @@ if (creatingPoll) {
                             {/* ✅ shows replier's profile pic */}
                             <AvatarCircle user={reply.user} size={30} />
                             <View style={styles.replyBox}>
-                              <Text style={styles.replyUsername}>
-                                {reply.user?.username}
-                                {reply.isEdited && <Text style={styles.editedTag}> · edited</Text>}
-                              </Text>
+                         <Text style={styles.replyUsername}>
+  {reply.user?.username}
+  <Text style={styles.commentTime}> · {timeAgo(reply.createdAt)}</Text>
+  {reply.isEdited && <Text style={styles.editedTag}> · edited</Text>}
+</Text>
 
                               {isEditingReply ? (
                                 <>
@@ -865,7 +867,7 @@ const styles = StyleSheet.create({
   commentUsername: { fontSize: 14, fontWeight: "600" },
   editedTag: { fontSize: 11, color: "#bbb", marginLeft: 4 },
   commentText: { marginTop: 5, fontSize: 14, color: "#333", lineHeight: 20 },
-
+commentTime: { fontSize: 11, color: "#999" },
   actionsRow: { flexDirection: "row", gap: 6, marginTop: 8, alignItems: "center", flexWrap: "wrap" },
   iconBtn: {
     width: 30,

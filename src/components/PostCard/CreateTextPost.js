@@ -17,13 +17,15 @@ import { launchImageLibrary } from "react-native-image-picker";
 import { apiFetch, getCachedUser } from "../../api/authToken";
 import Config from "react-native-config";
 import ShareSheet from "./ShareSheet";
+import Video from "react-native-video";
 
 const API = Config.API_URL;
-// Client-side size guard — text posts only ever carry images (no video),
-// so only the 10MB image limit applies here. This is a pre-check for
-// UX only; the real enforcement happens server-side in uploadPostMedia
-// (media.controllers.js), since uploads now go through our own backend.
+// Client-side size guards — same limits as every other post type:
+// 10MB per image, 20MB per video. This is a pre-check for UX only; the
+// real enforcement happens server-side in uploadPostMedia
+// (media.controllers.js), since uploads go through our own backend.
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10MB
+const MAX_VIDEO_BYTES = 20 * 1024 * 1024; // 20MB
 
 
 
@@ -102,14 +104,18 @@ function CreateTextPost({ onPost }) {
 
 
   const handleImageUpload = async () => {
-    const result = await launchImageLibrary({ mediaType: "photo", selectionLimit: 0, quality: 0.9 });
+    const result = await launchImageLibrary({ mediaType: "mixed", selectionLimit: 0, quality: 0.9 });
     if (result.didCancel || !result.assets?.length) return;
-    const mapped = result.assets.map((a) => ({
-      uri: a.uri,
-      type: a.type || "image/jpeg",
-      fileName: a.fileName || `image-${Date.now()}.jpg`,
-      size: a.fileSize || 0,
-    }));
+    const mapped = result.assets.map((a) => {
+      const isVideo = (a.type || "").startsWith("video");
+      return {
+        uri: a.uri,
+        type: a.type || (isVideo ? "video/mp4" : "image/jpeg"),
+        fileName: a.fileName || (isVideo ? `video-${Date.now()}.mp4` : `image-${Date.now()}.jpg`),
+        size: a.fileSize || 0,
+        isVideo,
+      };
+    });
     setImages((prev) => [...prev, ...mapped]);
   };
 
@@ -186,11 +192,19 @@ function CreateTextPost({ onPost }) {
 
   const uploadtextpost = async () => {
     try {
-      const oversized = images.filter((img) => img.size && img.size > MAX_IMAGE_BYTES);
-      if (oversized.length > 0) {
+      const oversizedImages = images.filter((img) => !img.isVideo && img.size && img.size > MAX_IMAGE_BYTES);
+      if (oversizedImages.length > 0) {
         Alert.alert(
           "",
-          `${oversized.length === 1 ? "One image" : `${oversized.length} images`} exceed the 10MB limit. Please choose smaller files.`
+          `${oversizedImages.length === 1 ? "One image" : `${oversizedImages.length} images`} exceed the 10MB limit. Please choose smaller files.`
+        );
+        return;
+      }
+      const oversizedVideos = images.filter((img) => img.isVideo && img.size && img.size > MAX_VIDEO_BYTES);
+      if (oversizedVideos.length > 0) {
+        Alert.alert(
+          "",
+          `${oversizedVideos.length === 1 ? "One video" : `${oversizedVideos.length} videos`} exceed the 20MB limit. Please choose smaller files.`
         );
         return;
       }
@@ -210,7 +224,7 @@ function CreateTextPost({ onPost }) {
           });
           if (!response.ok) throw new Error("Upload failed");
           const data = await response.json();
-          return { url: data.url || data.secure_url, type: "image" };
+          return { url: data.url || data.secure_url, type: img.isVideo ? "video" : "image" };
         })
       );
 
@@ -294,7 +308,13 @@ function CreateTextPost({ onPost }) {
         <View style={styles.imageRow}>
           {images.map((img, i) => (
             <View key={i} style={styles.imageWrapper}>
-              <Image source={{ uri: img.uri }} style={styles.previewImg} />
+              {img.isVideo ? (
+                <View style={[styles.previewImg, { backgroundColor: "#000", alignItems: "center", justifyContent: "center" }]}>
+                  <Icon name="play" solid size={18} color="#fff" />
+                </View>
+              ) : (
+                <Image source={{ uri: img.uri }} style={styles.previewImg} />
+              )}
               <TouchableOpacity style={styles.removeImg} onPress={() => removeImage(i)}>
                 <Icon name="times" size={10} color="#fff" />
               </TouchableOpacity>
@@ -313,7 +333,7 @@ function CreateTextPost({ onPost }) {
             <View style={[styles.optionIcon, { backgroundColor: "#e8f4fd" }]}>
               <Icon name="image" solid color="#1877f2" size={16} />
             </View>
-            <Text style={styles.optionLabel}>Add Image</Text>
+            <Text style={styles.optionLabel}>Add Image / Video</Text>
           </View>
           <Icon name="chevron-right" size={12} color="#bbb" />
         </TouchableOpacity>
@@ -473,7 +493,7 @@ function CreateTextPost({ onPost }) {
           <ToggleRow
             icon={<FeatherIcon name="download-cloud" size={15} color="#888" style={{ marginTop: 2 }} />}
             label="Disable download"
-            hint="Other people won't be able to download this post's images."
+            hint="Other people won't be able to download this post's images or videos."
             checked={disableDownload}
             onChange={setDisableDownload}
           />
@@ -516,7 +536,13 @@ function CreateTextPost({ onPost }) {
                       { width: images.length === 1 ? 280 : 240 },
                     ]}
                   >
-                    <Image source={{ uri: img.uri }} style={styles.previewGridImg} />
+                    {img.isVideo ? (
+                      <View style={{ width: "100%", height: 240, backgroundColor: "#000" }}>
+                        <Video source={{ uri: img.uri }} style={{ width: "100%", height: 240 }} resizeMode="contain" repeat muted />
+                      </View>
+                    ) : (
+                      <Image source={{ uri: img.uri }} style={styles.previewGridImg} />
+                    )}
                   </View>
                 ))}
               </ScrollView>
@@ -625,7 +651,7 @@ const styles = StyleSheet.create({
   previewImgStrip: { paddingHorizontal: 12, paddingBottom: 10 },
   previewImgWrapper: { marginRight: 8, borderRadius: 14, overflow: "hidden", backgroundColor: "#f0f0f0" },
   previewGridImg: { width: "100%", height: 240 },
-  previewActions: { flexDirection: "row", gap: 8, paddingHorizontal: 12, paddingVertical: 8, borderTopWidth: 1, borderTopColor: "#f0f0f0" },
+  previewActions: { flexDirection: "row", gap: 18, paddingHorizontal: 12, paddingVertical: 8, borderTopWidth: 1, borderTopColor: "#f0f0f0" },
   previewBtn: { padding: 4 },
 
   toggleRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", paddingVertical: 8, borderTopWidth: 1, borderTopColor: "#eee" },

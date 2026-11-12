@@ -3,6 +3,12 @@ import { View, Text, Image, TouchableOpacity, ScrollView, StyleSheet } from "rea
 import Icon from "react-native-vector-icons/FontAwesome5";
 import { useNavigation } from "@react-navigation/native";
 
+
+
+
+
+
+
 function StoriesBar({ stories, setStories, openStory, userProfile, currentUserId }) {
   const navigation = useNavigation();
 

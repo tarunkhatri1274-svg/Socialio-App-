@@ -35,6 +35,7 @@ import { ReactionButton, ReactionIcon, useReaction, reactionColor } from "../../
 import { BottomSheet, LikesSheet } from "../../components/PostCard/BottomSheet";
 import { useNavigation } from "@react-navigation/native";
 import { carouselTouchProps } from "../../components/carouselTouch";
+import TextPostVideo from "../../components/PostCard/TextPostVideo";
 import Navbar, { subscribeTabReload, useSwipeToChangeTab, setCommentsOpen } from "../../components/Navbar/Navbar";
 import socket from "../../sockets/Sockets";
 import CommentSection from "../../components/PostCard/CommentSection";
@@ -54,6 +55,7 @@ import {
   subscribeSavedPosts,
 } from "../../components/State/SavedPostStore";
 import { useBlockedIds, subscribeBlocked } from "../../components/State/BlockStore";
+import { timeAgo } from "../../utils/timeAgo";
 const API = Config.API_URL;
 const SCREEN_WIDTH = Dimensions.get("window").width;
 // FIX: needed to size the bottom sheet with a real height instead of
@@ -90,17 +92,6 @@ function formatCount(num) {
   if (n < 1_000_000) return format(n / 1000, "k");
   if (n < 1_000_000_000) return format(n / 1_000_000, "m");
   return format(n / 1_000_000_000, "b");
-}
-
-function timeAgo(createdAt) {
-  if (!createdAt) return "";
-  const diff = Date.now() - new Date(createdAt).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return "now";
-  if (mins < 60) return `${mins}m`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h`;
-  return `${Math.floor(hrs / 24)}d`;
 }
 
 function confirmAsync(message, title = "Confirm") {
@@ -905,7 +896,7 @@ const isDownloadingRef = useRef(false);
           </TouchableOpacity>
           {canDownload && (
             <TouchableOpacity onPress={download} style={styles.imgActionBtn}>
-              <Icon name="download" size={16} color="#555" />
+              <FeatherIcon name="download" size={19} color="#555" />
             </TouchableOpacity>
           )}
         </View>
@@ -1163,7 +1154,18 @@ function TextPostCard({ p, navigation, onBlock, onNotInterested, onHide, onDelet
       style={{ marginTop: 10 }}
       {...carouselTouchProps}
     >
-      {p.media.map((m, i) => (
+      {p.media.map((m, i) => m.type === "video" ? (
+        <TextPostVideo
+          key={i}
+          post={p}
+          media={m}
+          width={p.media.length === 1 ? SCREEN_WIDTH - 24 : 220}
+          height={220}
+          isOwner={isOwner}
+          isVisible={undefined}
+          onPress={handleMediaTap}
+        />
+      ) : (
         <TouchableOpacity key={i} activeOpacity={1} onPress={handleMediaTap}>
           <Image
             source={{ uri: m.url }}
@@ -1194,7 +1196,7 @@ function TextPostCard({ p, navigation, onBlock, onNotInterested, onHide, onDelet
           <FeedTagsRow tags={p?.tags} navigation={navigation} />
           <FeedCollabRow collaborators={collaborators} navigation={navigation} />
 
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 10, paddingBottom: 4 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 18, marginTop: 10, paddingBottom: 4 }}>
             <ReactionButton myReaction={myReaction} onQuickPress={quickToggle} onReact={react} style={styles.textActionBtn}>
               <ReactionIcon reaction={myReaction} size={16} inactiveColor={"#555"} />
               {(!hideLikeCount || isOwner) && (
@@ -1217,7 +1219,7 @@ function TextPostCard({ p, navigation, onBlock, onNotInterested, onHide, onDelet
             </TouchableOpacity>
             <TouchableOpacity
               onPress={toggleSave}
-              style={[styles.textActionBtn, { flex: 0, width: 44, marginLeft: "auto", backgroundColor: saved ? "#fff8e1" : "#efefef" }]}
+              style={[styles.textActionBtn, { marginLeft: "auto" }]}
             >
               <Icon name="bookmark" solid={saved} size={14} color={saved ? "#f5a623" : "#555"} />
             </TouchableOpacity>
@@ -1608,6 +1610,7 @@ const openUser = (user) => {
 
         grouped.get(sAuthorId).slides.push({
           id: s._id,
+          createdAt: s.createdAt,
           image: s.media?.url || "",
           type: s.media?.type || s.storyType,
           likes: s.likesCount || 0,
@@ -2175,13 +2178,13 @@ recentRemoveBtn: { padding: 6 },
   caption: { paddingHorizontal: 12, paddingTop: 8, paddingBottom: 4, fontSize: 14, lineHeight: 20 },
   moreBtn: { color: "#8e8e8e", fontWeight: "700" },
   likesSummary: { paddingHorizontal: 12, paddingTop: 2, fontSize: 13, color: "#333" },
-  imgActions: { flexDirection: "row", alignItems: "center", paddingVertical: 8, paddingHorizontal: 10, gap: 8 },
-  imgActionBtn: { flex: 1, height: 40, borderRadius: 10, backgroundColor: "#efefef", alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 6 },
+  imgActions: { flexDirection: "row", alignItems: "center", paddingVertical: 8, paddingHorizontal: 12, gap: 18 },
+  imgActionBtn: { height: 40, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 6 },
 
   textCard: { backgroundColor: "#fff", borderBottomWidth: 1, borderBottomColor: "#efefef", paddingTop: 14, paddingHorizontal: 12, paddingBottom: 4 },
   textCardBody: { fontSize: 15, lineHeight: 22, color: "#111" },
   textMenuBtn: { padding: 6, borderRadius: 8 },
-  textActionBtn: { height: 38, flex: 1, borderRadius: 10, backgroundColor: "#efefef", alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 5 },
+  textActionBtn: { height: 38, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 5 },
   textCount: { fontSize: 13, color: "#555", fontWeight: "600" },
 
   overlayTopBar: {

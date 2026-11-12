@@ -1,26 +1,3 @@
-// src/components/StoryBar/FeedStoryPreview.js
-//
-// ONE shared story preview used by every screen (Home, Explore, ExploreReels,
-// Video.js reels, UserProfileVideoPost). Previously each file carried its own
-// copy (FeedStoryPreview / ReelStoryPreview).
-//
-// Props
-//   story              { id, username, userProfile, isOwn, slides: [...] }
-//   onClose            () => void
-//   navigation         react-navigation object
-//   onSheetOpen        (bool) => void   — fires when share/viewers sheets open/close
-//   initialShowViewers bool             — open Viewers sheet right away
-//   initialStoryId     string           — jump to this slide id on open
-//   asOverlay          bool             — render as an absolute full-screen View
-//                                         instead of a <Modal> (use this when the
-//                                         caller already sits inside another
-//                                         native window, e.g. Explore's post
-//                                         overlay, to avoid nested-Modal flicker)
-//
-// Progress bar: each segment now fills over time (5s for images, the real
-// duration for videos), pauses while a sheet/keyboard/menu is open, and
-// auto-advances to the next slide / closes at the end. Past slides are full,
-// future slides empty, the current one animates.
 
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import {
@@ -62,7 +39,7 @@ import {
   setRuntimeComments,
   setLikeState,
 } from "../State/SyncStoryStore";
-
+import { timeAgo } from "../../utils/timeAgo";
 const API = Config.API_URL;
 const SCREEN_HEIGHT = Dimensions.get("window").height;
 const IMAGE_STORY_MS = 5000;
@@ -647,7 +624,14 @@ const [isMuted, setIsMuted] = useState(false);
 
           <View style={st.header}>
             <Avatar src={story.userProfile} username={story.username} size={28} />
-            <Text style={st.username}>{story.username}</Text>
+            <View style={{ flex: 1 }}>
+  <Text style={st.username}>{story.username}</Text>
+  {!isLiveSlide && !!slide?.createdAt && (
+    <Text style={{ color: "rgba(255,255,255,0.65)", fontSize: 11 }}>
+      {timeAgo(slide.createdAt)}
+    </Text>
+  )}
+</View>
             {isLiveSlide && liveStatus === "live" && (
               <View style={st.liveBadge}>
                 <View style={st.liveDot} />
@@ -865,7 +849,7 @@ const st = StyleSheet.create({
   card: { width: "100%", maxWidth: 340, height: "70%", maxHeight: 600, backgroundColor: "#000", borderRadius: 16, overflow: "hidden" },
   centered: { alignItems: "center", justifyContent: "center", padding: 24 },
   header: { flexDirection: "row", alignItems: "center", gap: 8, padding: 10 },
-  username: { color: "#fff", fontWeight: "700", fontSize: 14, flex: 1 },
+  username: { color: "#fff", fontWeight: "700", fontSize: 14 },
   media: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: "#000", position: "relative" },
   mediaEl: { width: "100%", height: "100%" },
   progressWrap: { flexDirection: "row", gap: 3, paddingHorizontal: 10, paddingTop: 8 },
