@@ -56,6 +56,7 @@ import {
 } from "../../components/State/SavedPostStore";
 import { useBlockedIds, subscribeBlocked } from "../../components/State/BlockStore";
 import { timeAgo } from "../../utils/timeAgo";
+import { useCarouselHeight } from "../../components/PostCard/PostImage";
 const API = Config.API_URL;
 const SCREEN_WIDTH = Dimensions.get("window").width;
 // FIX: needed to size the bottom sheet with a real height instead of
@@ -514,9 +515,10 @@ function getSlideCaption(p, index) {
 function FeedCarousel({ media, onOpen, cardWidth, onIndexChange }) {
   const [current, setCurrent] = useState(0);
   const total = media?.length || 0;
-  if (!total) return null;
-
   const width = cardWidth || SCREEN_WIDTH;
+  // Hook must run BEFORE the early return below (same as HomePage)
+  const boxH = useCarouselHeight(media, width, 420);
+  if (!total) return null;
 
   const onMomentumScrollEnd = (e) => {
     const idx = Math.round(e.nativeEvent.contentOffset.x / width);
@@ -528,18 +530,22 @@ function FeedCarousel({ media, onOpen, cardWidth, onIndexChange }) {
   return (
     <View style={{ position: "relative" }}>
       <ScrollView
-  horizontal
-  pagingEnabled
-  nestedScrollEnabled
-  directionalLockEnabled
-  scrollEventThrottle={16}
-  showsHorizontalScrollIndicator={false}
-  onMomentumScrollEnd={onMomentumScrollEnd}
-  {...carouselTouchProps}
->
+        horizontal
+        pagingEnabled
+        nestedScrollEnabled
+        directionalLockEnabled
+        scrollEventThrottle={16}
+        showsHorizontalScrollIndicator={false}
+        onMomentumScrollEnd={onMomentumScrollEnd}
+        {...carouselTouchProps}
+      >
         {media.map((m, i) => (
-          <TouchableOpacity key={i} activeOpacity={0.95} onPress={onOpen} style={{ width }}>
-            <Image source={{ uri: m.url }} style={[styles.postImg, { width }]} resizeMode="cover" />
+          <TouchableOpacity key={i} activeOpacity={1} onPress={onOpen} style={{ width }}>
+            <Image
+              source={{ uri: m.url }}
+              style={[styles.postImg, { width, height: boxH, backgroundColor: "#000" }]}
+              resizeMode="contain"
+            />
           </TouchableOpacity>
         ))}
       </ScrollView>

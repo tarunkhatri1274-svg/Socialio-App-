@@ -61,8 +61,13 @@ function EmailVerifyPage() {
 const handleGoogleSignup = async () => {
     setIsGoogleSigningUp(true);
     try {
-      await GoogleSignin.hasPlayServices();
-      const userInfo = await GoogleSignin.signIn();
+     await GoogleSignin.hasPlayServices();
+
+try {
+  await GoogleSignin.signOut();
+} catch (e) {}
+
+const userInfo = await GoogleSignin.signIn();
       const idToken = userInfo.data?.idToken || userInfo.idToken;
 
       const response = await fetch(`${API}/auth/google-signup`, {

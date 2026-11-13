@@ -102,9 +102,13 @@ navigation.replace("MainTabs", { screen: "Home" });
     try {
       setIsGoogleLoggingIn(true);
 
-      await GoogleSignin.hasPlayServices();
+    await GoogleSignin.hasPlayServices();
 
-      const userInfo = await GoogleSignin.signIn();
+try {
+  await GoogleSignin.signOut(); // forces the account picker to show
+} catch (e) {}
+
+const userInfo = await GoogleSignin.signIn();
 
       const idToken = userInfo.data?.idToken || userInfo.idToken;
 
@@ -138,14 +142,16 @@ navigation.replace("MainTabs", { screen: "Home" });
         await initPushNotifications();
 
         navigation.replace("MainTabs", { screen: "Home" });
-      } else if (data.notRegistered) {
-        Alert.alert(
-          "Account Not Found",
-          "Please register first."
-        );
+} else if (data.notRegistered) {
+  await GoogleSignin.signOut().catch(() => {});
 
-        navigation.navigate("VerifyEmail");
-      } else {
+  Alert.alert(
+    "Account Not Found",
+    "Please register first."
+  );
+
+  navigation.navigate("VerifyEmail");
+} else {
         Alert.alert("Error", data.message);
       }
     } catch (error) {
