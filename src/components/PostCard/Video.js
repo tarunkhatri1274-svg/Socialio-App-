@@ -666,10 +666,8 @@ const isOwner = MY_ID === p?.author?._id?.toString() || MY_ID === p?.author?.toS
   const [downloadCount, setDownloadCount] = useState(p?.downloadsCount || p?.downloads?.length || 0);
 const [sharesCount, setSharesCount] = useState(shareCount(p?.shares) ?? p?.sharesCount ?? 0);
 const isDownloadingRef = useRef(false);
-  const [viewsCount, setViewsCount] = useState(p?.views?.length || 0);
-  const [viewedByUsers, setViewedByUsers] = useState([]);
-  const [showViews, setShowViews] = useState(false);
-  const [viewerSearch, setViewerSearch] = useState("");
+  const [viewsCount, setViewsCount] = useState(p?.viewsCount ?? p?.views?.length ?? 0);
+
 
   // ── NEW: collaborator list sheet (mirrors likers/viewers sheets)
   const [showCollabList, setShowCollabList] = useState(false);
@@ -796,12 +794,9 @@ const isDownloadingRef = useRef(false);
 
     const fetchViews = async () => {
       try {
-        const res = await apiFetch(`${API}/auth/views/posts/${p._id}/views`);
+        const res = await apiFetch(`${API}/auth/views/posts/${p._id}/views-count`);
         const data = await res.json();
-        if (res.ok) {
-               setViewedByUsers(dedupeById(data.views ?? []));
-      setViewsCount(dedupeById(data.views ?? []).length);
-        }
+        if (res.ok && data.totalViews != null) setViewsCount(data.totalViews);
       } catch (err) {
         console.error("[fetch-views] failed:", err.message);
       }
@@ -941,14 +936,15 @@ socket.on(`post:${p._id}:likes`, onLikes);
 
   // Shared view recording (ViewStore) — counted once per session across every page.
   useEffect(() => {
-    if (isVisible && p?._id) recordPostView(p._id);
+    const visible = isVisible === undefined ? true : isVisible;
+    if (visible && p?._id) recordPostView(p._id);
   }, [isVisible, p?._id]);
 
   // FIX: showCollabList wasn't included here before, so the navbar
   // wouldn't hide itself (via onSheetOpen -> setCommentsOpen) while the
   // new collaborators sheet was open.
   useEffect(() => {
-    const anySheetOpen = showLikers || showComments || showShare || showViews || showStoryPreview || showCollabList;
+       const anySheetOpen = showLikers || showComments || showShare || showStoryPreview || showCollabList;
     onSheetOpen?.(anySheetOpen);
   }, [showLikers, showComments, showShare, showViews, showStoryPreview, showCollabList]);
 
@@ -1099,7 +1095,7 @@ socket.on(`post:${p._id}:likes`, onLikes);
 
 
   const filteredLikers = likedByUsers.filter((u) => u.username?.toLowerCase().includes(likerSearch.toLowerCase()));
-  const filteredViewers = viewedByUsers.filter((u) => u.username?.toLowerCase().includes(viewerSearch.toLowerCase()));
+ 
   const commentCount = comments.length;
 
   if (removedFromView) return null;
@@ -1191,8 +1187,8 @@ socket.on(`post:${p._id}:likes`, onLikes);
             </View>
           )}
 
-          <View style={{ alignItems: "center", gap: 4 }}>
-            <ActionBtn icon={<Icon name="eye" size={26} color="#fff" />} onPress={() => setShowViews(true)} />
+           <View style={{ alignItems: "center", gap: 4 }}>
+            <Icon name="eye" size={26} color="#fff" />
             <Text style={S.actionLabel}>{formatCount(viewsCount)}</Text>
           </View>
 
@@ -1278,54 +1274,6 @@ socket.on(`post:${p._id}:likes`, onLikes);
           }}
           onNavigate={goToProfile}
         />
-      )}
-
-      {/* VIEWERS SHEET */}
-      {showViews && (
-        <BottomSheet
-          title="Viewed by"
-          onClose={() => {
-            setShowViews(false);
-            setViewerSearch("");
-          }}
-        >
-          {viewedByUsers.length > 0 && (
-            <View style={{ paddingHorizontal: 12, paddingBottom: 8 }}>
-              <View style={sheet.searchWrap}>
-                <FeatherIcon name="search" size={14} color="#999" />
-                <TextInput value={viewerSearch} onChangeText={setViewerSearch} placeholder="Search" style={sheet.searchInput} />
-                {!!viewerSearch && (
-                  <TouchableOpacity onPress={() => setViewerSearch("")}>
-                    <FeatherIcon name="x" size={14} color="#999" />
-                  </TouchableOpacity>
-                )}
-              </View>
-            </View>
-          )}
-          <View style={{ paddingHorizontal: 12 }}>
-            {filteredViewers.length > 0 ? (
-              filteredViewers.map((u, i) => (
-                <TouchableOpacity
-                  key={u._id ?? i}
-                  style={sheet.row}
-                  onPress={() => {
-                    setShowViews(false);
-                    setViewerSearch("");
-                    goToProfile(u._id);
-                  }}
-                >
-                  <Avatar src={u.profilePic} username={u.username} size={40} />
-                  <View>
-                    <Text style={{ fontWeight: "600", fontSize: 14 }}>{u.username}</Text>
-                    {!!u.bio && <Text style={{ fontSize: 12, color: "#999" }}>{u.bio}</Text>}
-                  </View>
-                </TouchableOpacity>
-              ))
-            ) : (
-              <Text style={sheet.empty}>{viewerSearch ? "No results found" : "No views yet"}</Text>
-            )}
-          </View>
-        </BottomSheet>
       )}
 
       {/* COLLABORATORS SHEET — NEW, mirrors likers/viewers sheets. Opens

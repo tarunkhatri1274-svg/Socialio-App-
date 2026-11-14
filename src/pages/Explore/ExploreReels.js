@@ -635,10 +635,8 @@ function ExploreReelCard({ p = {}, isVisible: isVisibleProp, onBlock, onDeleted,
   const [sharesCount, setSharesCount] = useState(shareCount(p?.shares) ?? p?.sharesCount ?? 0);
   const [resolvedUsers, setResolvedUsers] = useState({});
 const isDownloadingRef = useRef(false);
-  const [viewsCount, setViewsCount] = useState(p?.views?.length || 0);
-  const [viewedByUsers, setViewedByUsers] = useState([]);
-  const [showViews, setShowViews] = useState(false);
-  const [viewerSearch, setViewerSearch] = useState("");
+  const [viewsCount, setViewsCount] = useState(p?.viewsCount ?? p?.views?.length ?? 0);
+ 
 
   // ── NEW: collaborator list sheet (mirrors likers/viewers sheets)
   const [showCollabList, setShowCollabList] = useState(false);
@@ -761,12 +759,9 @@ const isDownloadingRef = useRef(false);
 
     const fetchViews = async () => {
       try {
-        const res = await apiFetch(`${API}/auth/views/posts/${p._id}/views`);
+        const res = await apiFetch(`${API}/auth/views/posts/${p._id}/views-count`);
         const data = await res.json();
-        if (res.ok) {
-               setViewedByUsers(dedupeById(data.views ?? []));
-      setViewsCount(dedupeById(data.views ?? []).length);
-        }
+        if (res.ok && data.totalViews != null) setViewsCount(data.totalViews);
       } catch {}
     };
     fetchViews();
@@ -901,7 +896,8 @@ const isDownloadingRef = useRef(false);
 
   // Shared view recording (ViewStore) — counted once per session across every page.
   useEffect(() => {
-    if (isVisible && p?._id) recordPostView(p._id);
+    const visible = isVisible === undefined ? true : isVisible;
+    if (visible && p?._id) recordPostView(p._id);
   }, [isVisible, p?._id]);
 
   useEffect(() => {
@@ -1049,7 +1045,7 @@ const isDownloadingRef = useRef(false);
 
 
   const filteredLikers = likedByUsers.filter((u) => u.username?.toLowerCase().includes(likerSearch.toLowerCase()));
-  const filteredViewers = viewedByUsers.filter((u) => u.username?.toLowerCase().includes(viewerSearch.toLowerCase()));
+ 
   const commentCount = comments.length;
 
   if (removedFromView) return null;
@@ -1121,8 +1117,8 @@ const isDownloadingRef = useRef(false);
             </View>
           )}
 
-          <View style={{ alignItems: "center", gap: 4 }}>
-            <ActionBtn icon={<Icon name="eye" size={22} color="#fff" />} onPress={() => setShowViews(true)} />
+                   <View style={{ alignItems: "center", gap: 4 }}>
+            <Icon name="eye" size={22} color="#fff" />
             <Text style={S.actionLabel}>{formatCount(viewsCount)}</Text>
           </View>
 
@@ -1208,52 +1204,7 @@ const isDownloadingRef = useRef(false);
         />
       )}
 
-      {/* VIEWERS SHEET */}
-      {showViews && (
-        <BottomSheet scrollable={false} animationType="slide"
-          title="Viewed by"
-          onClose={() => {
-            setShowViews(false);
-            setViewerSearch("");
-          }}
-        >
-          {viewedByUsers.length > 0 && (
-            <View style={{ paddingHorizontal: 12, paddingBottom: 8 }}>
-              <View style={sheet.searchWrap}>
-                <FeatherIcon name="search" size={14} color="#999" />
-                <TextInput value={viewerSearch} onChangeText={setViewerSearch} placeholder="Search" style={sheet.searchInput} />
-                {!!viewerSearch && (
-                  <TouchableOpacity onPress={() => setViewerSearch("")}>
-                    <FeatherIcon name="x" size={14} color="#999" />
-                  </TouchableOpacity>
-                )}
-              </View>
-            </View>
-          )}
-          <FlatList
-            data={filteredViewers}
-            keyExtractor={(u, i) => u._id ?? i.toString()}
-            contentContainerStyle={{ paddingHorizontal: 12 }}
-            ListEmptyComponent={<Text style={sheet.empty}>{viewerSearch ? "No results found" : "No views yet"}</Text>}
-            renderItem={({ item: u }) => (
-              <TouchableOpacity
-                style={sheet.row}
-                onPress={() => {
-                  setShowViews(false);
-                  setViewerSearch("");
-                  goToProfile(u._id);
-                }}
-              >
-                <Avatar src={u.profilePic} username={u.username} size={40} />
-                <View>
-                  <Text style={{ fontWeight: "600", fontSize: 14 }}>{u.username}</Text>
-                  {!!u.bio && <Text style={{ fontSize: 12, color: "#999" }}>{u.bio}</Text>}
-                </View>
-              </TouchableOpacity>
-            )}
-          />
-        </BottomSheet>
-      )}
+   
 
       {/* COLLABORATORS SHEET — NEW, mirrors likers/viewers sheets. Opens
           from the "N others" text in CoAuthorHeader when a post has 3+

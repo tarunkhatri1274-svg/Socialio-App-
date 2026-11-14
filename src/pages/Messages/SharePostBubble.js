@@ -16,6 +16,7 @@ import Config from "react-native-config";
 import { apiFetch as authApiFetch } from "../../api/authToken";
 import { useBlockedIds } from "../../components/State/BlockStore";
 import { recordPostView } from "../../components/State/ViewStore";
+import socket from "../../sockets/Sockets";
 const API = Config.API_URL;
 const GOLDEN = "rgb(234,182,118)";
 
@@ -78,10 +79,44 @@ export function getShareCaption(msg, fromMe, otherUsername) {
  */
 function PostViewerOverlay({ post, onClose }) {
   const [index, setIndex] = useState(0);
-useEffect(() => {
-  const m = Array.isArray(post?.media) ? post.media[0] : null;
-  if (post?._id && (m?.type === "video" || post?.mediaType === "video")) recordPostView(post._id);
-}, [post?._id]);
+  const [viewsCount, setViewsCount] = useState(post?.viewsCount ?? post?.views?.length ?? 0);
+
+  // Count a view whenever a VIDEO is on screen (works for carousels too).
+  // ViewStore dedupes, so swiping back and forth won't inflate the count.
+  useEffect(() => {
+    if (!post?._id) return;
+    const list =
+      Array.isArray(post.media) && post.media.length > 0
+        ? post.media
+        : post.mediaUrl
+        ? [{ url: post.mediaUrl, type: post.mediaType }]
+        : [];
+    if (list[index]?.type === "video") recordPostView(post._id);
+  }, [post?._id, index]);
+
+  // Live views COUNT only (no viewers list)
+  useEffect(() => {
+    if (!post?._id) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await authApiFetch(`${API}/auth/views/posts/${post._id}/views-count`);
+        const data = await res.json();
+        if (!cancelled && res.ok && data.totalViews != null) setViewsCount(data.totalViews);
+      } catch {}
+    })();
+    const onViews = ({ totalViews }) => {
+      if (totalViews != null) setViewsCount(totalViews);
+    };
+    socket.emit("joinPost", post._id);
+    socket.on(`post:${post._id}:views`, onViews);
+    return () => {
+      cancelled = true;
+      socket.off(`post:${post._id}:views`, onViews);
+      socket.emit("leavePost", post._id);
+    };
+  }, [post?._id]);
+
   if (!post) return null;
 
   const mediaList = Array.isArray(post.media) && post.media.length > 0
@@ -144,6 +179,7 @@ useEffect(() => {
           )}
 
           {(post.caption || post.text) && <Text style={ov.caption}>{post.caption || post.text}</Text>}
+                    {isVideo && <Text style={ov.viewsText}>👁 {viewsCount} {viewsCount === 1 ? "view" : "views"}</Text>}
         </TouchableOpacity>
       </TouchableOpacity>
     </Modal>
@@ -303,7 +339,11 @@ const blockedIds = useBlockedIds();
   };
 
   const handleVideoTap = () => {
-    if (!expanded) { setExpanded(true); return; }
+    if (!expanded) {
+      setExpanded(true);
+      if (!isStory && sharedPost?.postId) recordPostView(sharedPost.postId);
+      return;
+    }
     // Playback toggling is handled via the `paused` prop tied to a
     // small bit of extra state if you want a real pause toggle — the
     // web version reached into the DOM video element directly, which
@@ -756,4 +796,5 @@ const ov = StyleSheet.create({
   dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "#fff" },
   counter: { position: "absolute", top: 8, right: 10, backgroundColor: "rgba(0,0,0,0.5)", borderRadius: 12, paddingHorizontal: 8, paddingVertical: 2 },
   counterText: { color: "#fff", fontSize: 11, fontWeight: "600" },
+    viewsText: { fontSize: 12, color: "#666", fontWeight: "600", paddingHorizontal: 14, paddingTop: 10 },
 });

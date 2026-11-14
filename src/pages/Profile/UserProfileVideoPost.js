@@ -584,10 +584,8 @@ function ProfileVideoCard({ p = {}, onBlock, onDeleted, isOwner, isVisible: isVi
     }
   }, [pendingSheet, p?._id]);
 
-  const [viewsCount, setViewsCount] = useState(p?.views?.length || 0);
-  const [viewedByUsers, setViewedByUsers] = useState([]);
-  const [showViews, setShowViews] = useState(false);
-  const [viewerSearch, setViewerSearch] = useState("");
+  const [viewsCount, setViewsCount] = useState(p?.viewsCount ?? p?.views?.length ?? 0);
+
 
   // ── NEW: collaborator list sheet (mirrors likers/viewers sheets)
   const [showCollabList, setShowCollabList] = useState(false);
@@ -665,12 +663,9 @@ function ProfileVideoCard({ p = {}, onBlock, onDeleted, isOwner, isVisible: isVi
 
     const fetchViews = async () => {
       try {
-        const res = await apiFetch(`${API}/auth/views/posts/${p._id}/views`);
+        const res = await apiFetch(`${API}/auth/views/posts/${p._id}/views-count`);
         const data = await res.json();
-        if (res.ok) {
-               setViewedByUsers(dedupeById(data.views ?? []));
-      setViewsCount(dedupeById(data.views ?? []).length);
-        }
+        if (res.ok && data.totalViews != null) setViewsCount(data.totalViews);
       } catch {}
     };
     fetchViews();
@@ -804,7 +799,8 @@ function ProfileVideoCard({ p = {}, onBlock, onDeleted, isOwner, isVisible: isVi
 
   // Shared view recording (ViewStore) — counted once per session across every page.
   useEffect(() => {
-    if (isVisible && p?._id) recordPostView(p._id);
+    const visible = isVisible === undefined ? true : isVisible;
+    if (visible && p?._id) recordPostView(p._id);
   }, [isVisible, p?._id]);
 
   useEffect(() => {
@@ -956,7 +952,7 @@ function ProfileVideoCard({ p = {}, onBlock, onDeleted, isOwner, isVisible: isVi
 
 
   const filteredLikers = likedByUsers.filter(u => u.username?.toLowerCase().includes(likerSearch.toLowerCase()));
-  const filteredViewers = viewedByUsers.filter(u => u.username?.toLowerCase().includes(viewerSearch.toLowerCase()));
+ 
   const commentCount = comments.length;
 const videoUrl = p?.media?.[0]?.url || "";
 const videoSource = useMemo(
@@ -1058,9 +1054,7 @@ const videoSource = useMemo(
         )}
 
         <View style={{ alignItems: "center", gap: 4 }}>
-          <TouchableOpacity style={S.actionBtn} onPress={() => setShowViews(true)}>
-            <FeatherIcon name="eye" size={22} color="#fff" />
-          </TouchableOpacity>
+          <FeatherIcon name="eye" size={22} color="#fff" />
           <Text style={S.actionLabel}>{formatCount(viewsCount)}</Text>
         </View>
 
@@ -1133,41 +1127,7 @@ const videoSource = useMemo(
         />
       )}
 
-      {/* VIEWERS SHEET */}
-      {showViews && (
-        <Modal visible transparent animationType="slide" onRequestClose={() => { setShowViews(false); setViewerSearch(""); }}>
-          <TouchableOpacity style={sheet.overlay} activeOpacity={1} onPress={() => { setShowViews(false); setViewerSearch(""); }}>
-            <TouchableOpacity activeOpacity={1} style={sheet.box} onPress={() => {}}>
-              <View style={sheet.handle} />
-              <View style={sheet.header}>
-                <Text style={{ fontWeight: "700" }}>Viewed by</Text>
-                <TouchableOpacity style={sheet.closeX} onPress={() => { setShowViews(false); setViewerSearch(""); }}><FeatherIcon name="x" size={18} /></TouchableOpacity>
-              </View>
-              {viewedByUsers.length > 0 && (
-                <View style={{ paddingHorizontal: 12, paddingBottom: 8 }}>
-                  <View style={sheet.searchWrap}>
-                    <FeatherIcon name="search" size={14} color="#999" />
-                    <TextInput value={viewerSearch} onChangeText={setViewerSearch} placeholder="Search" style={sheet.searchInput} />
-                    {viewerSearch !== "" && <TouchableOpacity onPress={() => setViewerSearch("")}><FeatherIcon name="x" size={14} color="#999" /></TouchableOpacity>}
-                  </View>
-                </View>
-              )}
-              <ScrollView style={sheet.list}>
-                {filteredViewers.length > 0 ? filteredViewers.map((u, i) => (
-                  <TouchableOpacity key={u._id ?? i} style={sheet.row} onPress={() => { setShowViews(false); setViewerSearch(""); goToProfile(u._id); }}>
-                    <Avatar src={u.profilePic} username={u.username} size={40} />
-                    <View>
-                      <Text style={{ fontWeight: "600", fontSize: 14 }}>{u.username}</Text>
-                      {!!u.bio && <Text style={{ fontSize: 12, color: "#999" }}>{u.bio}</Text>}
-                    </View>
-                  </TouchableOpacity>
-                )) : <Text style={sheet.empty}>{viewerSearch ? "No results found" : "No views yet"}</Text>}
-              </ScrollView>
-            </TouchableOpacity>
-          </TouchableOpacity>
-        </Modal>
-      )}
-
+      
       {/* COLLABORATORS SHEET — NEW, mirrors likers/viewers sheets. Opens
           from the "N others" text in CoAuthorRow when a post has 3+
           collaborators (author + accepted collaborators). */}

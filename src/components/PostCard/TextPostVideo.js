@@ -18,7 +18,7 @@ import { apiFetch } from "../../api/authToken";
 import socket from "../../sockets/Sockets";
 import { recordPostView } from "../State/ViewStore";
 import { saveMediaToGallery } from "../../utils/saveToGallery";
-import { BottomSheet } from "./BottomSheet";
+
 
 const API = Config.API_URL;
 
@@ -30,15 +30,7 @@ function formatCount(num) {
   return `${(n / 1_000_000_000).toFixed(1).replace(/\.0$/, "")}b`;
 }
 
-function dedupeById(list) {
-  const seen = new Set();
-  return (list || []).filter((u) => {
-    const id = (u?._id ?? u)?.toString();
-    if (!id || seen.has(id)) return false;
-    seen.add(id);
-    return true;
-  });
-}
+
 
 async function requestSavePermission() {
   if (Platform.OS !== "android") return true;
@@ -51,59 +43,9 @@ async function requestSavePermission() {
   return granted === PermissionsAndroid.RESULTS.GRANTED;
 }
 
-function ViewerAvatar({ src, username, size = 40 }) {
-  if (src) return <Image source={{ uri: src }} style={{ width: size, height: size, borderRadius: size / 2 }} />;
-  return (
-    <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: "#1877f2", alignItems: "center", justifyContent: "center" }}>
-      <Text style={{ color: "#fff", fontWeight: "700", fontSize: size * 0.38 }}>{username?.[0]?.toUpperCase() || "?"}</Text>
-    </View>
-  );
-}
 
-/* Viewers list — same "Viewed by" sheet the video post uses. */
-function ViewersSheet({ users, onClose, onNavigate }) {
-  const [search, setSearch] = useState("");
-  const filtered = users.filter((u) => u.username?.toLowerCase().includes(search.toLowerCase()));
-  return (
-    <BottomSheet title="Viewed by" onClose={onClose}>
-      {users.length > 0 && (
-        <View style={{ paddingHorizontal: 12, paddingTop: 10, paddingBottom: 4 }}>
-          <View style={styles.searchWrap}>
-            <FeatherIcon name="search" size={14} color="#999" />
-            <TextInput value={search} onChangeText={setSearch} placeholder="Search" style={styles.searchInput} />
-            {!!search && (
-              <TouchableOpacity onPress={() => setSearch("")}>
-                <FeatherIcon name="x" size={14} color="#999" />
-              </TouchableOpacity>
-            )}
-          </View>
-        </View>
-      )}
-      <View style={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: 20 }}>
-        {filtered.length > 0 ? (
-          filtered.map((u, i) => (
-            <TouchableOpacity
-              key={u._id ?? i}
-              style={styles.viewerRow}
-              onPress={() => {
-                onClose();
-                onNavigate(u._id);
-              }}
-            >
-              <ViewerAvatar src={u.profilePic} username={u.username} />
-              <View>
-                <Text style={{ fontSize: 15, fontWeight: "600" }}>{u.username}</Text>
-                {!!u.bio && <Text style={{ fontSize: 12, color: "#999" }}>{u.bio}</Text>}
-              </View>
-            </TouchableOpacity>
-          ))
-        ) : (
-          <Text style={styles.empty}>{search ? "No results found" : "No views yet"}</Text>
-        )}
-      </View>
-    </BottomSheet>
-  );
-}
+
+
 
 /**
  * Video tile for TEXT posts. Same size as the image tile next to it, plays
@@ -128,9 +70,8 @@ function TextPostVideo({ post, media, width, height = 240, isOwner = false, isVi
 
   const [userPaused, setUserPaused] = useState(!autoMode);
   const [muted, setMuted] = useState(true);
-  const [viewsCount, setViewsCount] = useState(post?.views?.length || 0);
-  const [viewers, setViewers] = useState([]);
-  const [showViewers, setShowViewers] = useState(false);
+  const [viewsCount, setViewsCount] = useState(post?.viewsCount ?? post?.views?.length ?? 0);
+
   const [downloadCount, setDownloadCount] = useState(post?.downloadsCount || post?.downloads?.length || 0);
   const isDownloadingRef = useRef(false);
   const recordedRef = useRef(false);
@@ -154,18 +95,15 @@ function TextPostVideo({ post, media, width, height = 240, isOwner = false, isVi
   }, [paused, post?._id]);
 
   // Live view count + viewers list.
+  // Live view count only
   useEffect(() => {
     if (!post?._id) return;
     let cancelled = false;
     (async () => {
       try {
-        const res = await apiFetch(`${API}/auth/views/posts/${post._id}/views`);
+        const res = await apiFetch(`${API}/auth/views/posts/${post._id}/views-count`);
         const data = await res.json();
-        if (!cancelled && res.ok) {
-          const list = dedupeById(data.views ?? []);
-          setViewers(list);
-          setViewsCount(list.length);
-        }
+        if (!cancelled && res.ok && data.totalViews != null) setViewsCount(data.totalViews);
       } catch {}
     })();
     const onViews = ({ totalViews }) => {
@@ -198,9 +136,7 @@ function TextPostVideo({ post, media, width, height = 240, isOwner = false, isVi
     }
   };
 
-  const goToProfile = (id) => {
-    if (id) navigation.navigate("UserProfile", { userId: id });
-  };
+
 
   const source = useMemo(() => (url ? { uri: url } : undefined), [url]);
   const togglePause = useCallback(() => setUserPaused((p) => !p), []);
@@ -232,9 +168,7 @@ function TextPostVideo({ post, media, width, height = 240, isOwner = false, isVi
           </TouchableOpacity>
 
           <View style={styles.actionCol}>
-            <TouchableOpacity style={styles.actionBtn} onPress={() => setShowViewers(true)}>
-              <FeatherIcon name="eye" size={22} color="#fff" style={styles.icon} />
-            </TouchableOpacity>
+            <FeatherIcon name="eye" size={22} color="#fff" style={styles.icon} />
             <Text style={styles.actionLabel}>{formatCount(viewsCount)}</Text>
           </View>
 
@@ -249,7 +183,7 @@ function TextPostVideo({ post, media, width, height = 240, isOwner = false, isVi
         </View>
       </View>
 
-      {showViewers && <ViewersSheet users={viewers} onClose={() => setShowViewers(false)} onNavigate={goToProfile} />}
+     
     </>
   );
 }
