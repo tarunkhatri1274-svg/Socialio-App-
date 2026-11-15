@@ -94,24 +94,14 @@ function TextPostVideo({ post, media, width, height = 240, isOwner = false, isVi
     }
   }, [paused, post?._id]);
 
-  // Live view count + viewers list.
-  // Live view count only
+  // Live view count only (initial value comes with the post)
   useEffect(() => {
     if (!post?._id) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await apiFetch(`${API}/auth/views/posts/${post._id}/views-count`);
-        const data = await res.json();
-        if (!cancelled && res.ok && data.totalViews != null) setViewsCount(data.totalViews);
-      } catch {}
-    })();
     const onViews = ({ totalViews }) => {
       if (totalViews != null) setViewsCount(totalViews);
     };
     socket.on(`post:${post._id}:views`, onViews);
     return () => {
-      cancelled = true;
       socket.off(`post:${post._id}:views`, onViews);
     };
   }, [post?._id]);

@@ -757,14 +757,7 @@ const isDownloadingRef = useRef(false);
     };
     fetchComments();
 
-    const fetchViews = async () => {
-      try {
-        const res = await apiFetch(`${API}/auth/views/posts/${p._id}/views-count`);
-        const data = await res.json();
-        if (res.ok && data.totalViews != null) setViewsCount(data.totalViews);
-      } catch {}
-    };
-    fetchViews();
+
 
     const fetchCollaborators = async () => {
       try {

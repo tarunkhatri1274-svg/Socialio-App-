@@ -792,16 +792,7 @@ const isDownloadingRef = useRef(false);
     };
     fetchComments();
 
-    const fetchViews = async () => {
-      try {
-        const res = await apiFetch(`${API}/auth/views/posts/${p._id}/views-count`);
-        const data = await res.json();
-        if (res.ok && data.totalViews != null) setViewsCount(data.totalViews);
-      } catch (err) {
-        console.error("[fetch-views] failed:", err.message);
-      }
-    };
-    fetchViews();
+
 
 
 const fetchCollaborators = async () => {
@@ -946,7 +937,7 @@ socket.on(`post:${p._id}:likes`, onLikes);
   useEffect(() => {
        const anySheetOpen = showLikers || showComments || showShare || showStoryPreview || showCollabList;
     onSheetOpen?.(anySheetOpen);
-  }, [showLikers, showComments, showShare, showViews, showStoryPreview, showCollabList]);
+  }, [showLikers, showComments, showShare, showStoryPreview, showCollabList]);
 
   useEffect(() => {
     const unsub = subscribeSavedPosts((postId, savedState) => {
