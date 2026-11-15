@@ -676,7 +676,7 @@ const s = StyleSheet.create({
   inputPrefix: { paddingLeft: 14, fontSize: 15, color: ACCENT_DARK, fontWeight: "600" },
   input: { flex: 1, paddingVertical: 14, paddingHorizontal: 12, fontSize: 15, color: TEXT_PRIMARY },
   textareaWrapper: { borderWidth: 1, borderColor: BORDER, borderRadius: 16, backgroundColor: "#fafafa" },
-  textarea: { padding: 14, fontSize: 15, color: TEXT_PRIMARY, textAlignVertical: "top", minHeight: 90 },
+ textarea: { padding: 14, fontSize: 15, color: TEXT_PRIMARY, textAlignVertical: "top", minHeight: 90, maxHeight: 220 },
   charCount: { textAlign: "right", paddingHorizontal: 14, paddingBottom: 12, fontSize: 11, color: "#aaa" },
   saveBtn: { marginHorizontal: 18, marginTop: 34, paddingVertical: 15, borderRadius: 18, backgroundColor: ACCENT, alignItems: "center" },
   saveBtnSaved: { backgroundColor: "#2ecc71" },
