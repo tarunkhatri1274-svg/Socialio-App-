@@ -36,7 +36,7 @@ import LongPressTap from "./LongPressTap";
 import MuteMenu from "./MuteMenu";
 import { ProfileHeaderSkeleton, ProfileGridSkeleton } from "../../components/Skeleton/ProfileSkeleton";
 import { useRefresh, useSwipeTabs } from "../../hooks/useRefreshAndSwipe";
-
+import LinkifiedText from "../../components/PostCard/LinkifiedText";
 const API = Config.API_URL;
 
 // ── Count formatter ──────────────────────────────────────────────────────
@@ -796,7 +796,8 @@ function UserProfileView() {
         </View>
 
         {/* ── Bio ── */}
-        {!!user?.bio && <Text style={styles.bio}>{user.bio}</Text>}
+        {/* ── Bio ── */}
+{!!user?.bio && <LinkifiedText text={user.bio} limit={120} textStyle={styles.bio} />}
 
         {/* ── Mutual Followers ── */}
         {!isBlocked && mutualCount > 0 && (
@@ -1032,7 +1033,7 @@ const TextPosts = ({ posts, navigation, userId, itemRefs }) => {
             <Text style={{ fontWeight: "600", fontSize: 14, color: "#111" }}>{post?.author?.username}</Text>
           </View>
 
-          {!!post?.text && <ExpandableProfileText text={post.text} />}
+          {!!post?.text && <LinkifiedText text={post.text} limit={180} textStyle={profileTextStyle} />}
 
           {post?.media?.length > 0 && (
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ paddingHorizontal: 12, paddingBottom: 12 }}>

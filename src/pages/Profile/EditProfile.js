@@ -589,7 +589,7 @@ export default function EditProfile() {
               <View style={[s.textareaWrapper, focusedField === "bio" && s.inputWrapperFocused]}>
                 <TextInput
                   value={description}
-                  onChangeText={(t) => setDescription(t.slice(0, 150))}
+                  onChangeText={(t) => setDescription(t.slice(0, 500))}
                   onFocus={() => setFocusedField("bio")}
                   onBlur={() => setFocusedField(null)}
                   style={s.textarea}
@@ -598,7 +598,7 @@ export default function EditProfile() {
                   multiline
                   numberOfLines={4}
                 />
-                <Text style={s.charCount}>{description.length}/150</Text>
+                <Text style={s.charCount}>{description.length}/500</Text>
               </View>
             </View>
           </View>

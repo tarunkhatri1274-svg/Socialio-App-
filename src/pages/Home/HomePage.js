@@ -65,6 +65,7 @@ import {
 } from "../../components/State/SavedPostStore";
 import { timeAgo } from "../../utils/timeAgo";
 import { useCarouselHeight } from "../../components/PostCard/PostImage";
+import LinkifiedText from "../../components/PostCard/LinkifiedText";
 const API = Config.API_URL;
 const SCREEN_WIDTH = Dimensions.get("window").width;
 // FIX: needed to size the bottom sheet with a real height instead of only
@@ -277,30 +278,13 @@ function Avatar({ src, username, size = 38, style: extra = {}, onPress, storySta
 
 /* ─────────────────────────── CaptionText ─────────────────────────── */
 function CaptionText({ text, limit = 100, textStyle }) {
-  const [expanded, setExpanded] = useState(false);
-  if (!text) return null;
-  const isLong = text.length > limit;
-
-  if (!isLong || expanded) {
-    return (
-      <Text style={textStyle}>
-        {text}
-        {isLong && (
-          <Text onPress={() => setExpanded(false)} style={styles.moreBtn}>
-            {" "}less
-          </Text>
-        )}
-      </Text>
-    );
-  }
-
   return (
-    <Text style={textStyle}>
-      {text.slice(0, limit).trimEnd()}...
-      <Text onPress={() => setExpanded(true)} style={styles.moreBtn}>
-        {" "}more
-      </Text>
-    </Text>
+    <LinkifiedText
+      text={text}
+      limit={limit}
+      textStyle={textStyle}
+      moreStyle={styles.moreBtn}
+    />
   );
 }
 

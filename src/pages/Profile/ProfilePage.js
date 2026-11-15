@@ -35,7 +35,7 @@ import { carouselTouchProps } from "../../components/carouselTouch";
 import { apiFetch } from "../../api/authToken";
 import { consumePendingOpenMemory } from "../Activity/ActivityPage";
 import { useRefresh, useSwipeTabs } from "../../hooks/useRefreshAndSwipe";
-
+import LinkifiedText from "../../components/PostCard/LinkifiedText";
 const API = Config.API_URL;
 
 // ── Count formatter (1000 -> 1K, 1500000 -> 1.5M, etc.) ─────────────────────
@@ -803,7 +803,8 @@ function Profilepage() {
         </View>
 
         {/* ── Bio ── */}
-        {!!user?.bio && <Text style={styles.bio}>{user.bio}</Text>}
+       {/* ── Bio ── */}
+{!!user?.bio && <LinkifiedText text={user.bio} limit={120} textStyle={styles.bio} />}
 
         {/* ── Action Boxes ── */}
         <View style={styles.actionsWrap}>
@@ -1018,7 +1019,7 @@ const TextPosts = ({ posts, navigation, itemRefs }) => {
             <Text style={{ fontWeight: "600", fontSize: 14, color: "#111" }}>{post?.author?.username}</Text>
           </View>
 
-          {!!post?.text && <ExpandableProfileText text={post.text} />}
+          {!!post?.text && <LinkifiedText text={post.text} limit={180} textStyle={profileTextStyle} />}
 
           {post?.media?.length > 0 && (
             <ScrollView

@@ -33,6 +33,7 @@ import TextPostVideo from "./TextPostVideo";
 import { isPostSaved, toggleSavedPost, subscribeSavedPosts } from "../State/SavedPostStore";
 import { carouselTouchProps } from "../../components/carouselTouch";
 import { timeAgo } from "../../utils/timeAgo";
+import LinkifiedText from "./LinkifiedText";
 const API = Config.API_URL;
 // FIX: this file never imported/measured screen dimensions at all, so
 // there was nothing to size the sheet against. Added the same
@@ -212,30 +213,13 @@ function CoAuthorHeader({ author, acceptedCollaborators, onNavigate, onOpenColla
 
 /* ── Expandable text — "...more" / "less" ── */
 function ExpandableText({ text, limit = 240 }) {
-  const [expanded, setExpanded] = useState(false);
-  if (!text) return null;
-  const isLong = text.length > limit;
-
-  if (!isLong || expanded) {
-    return (
-      <Text style={styles.postText}>
-        {text}
-        {isLong && (
-          <Text onPress={() => setExpanded(false)} style={styles.moreBtn}>
-            {" "}less
-          </Text>
-        )}
-      </Text>
-    );
-  }
-
   return (
-    <Text style={styles.postText}>
-      {text.slice(0, limit).trimEnd()}...
-      <Text onPress={() => setExpanded(true)} style={styles.moreBtn}>
-        {" "}more
-      </Text>
-    </Text>
+    <LinkifiedText
+      text={text}
+      limit={limit}
+      textStyle={styles.postText}
+      moreStyle={styles.moreBtn}
+    />
   );
 }
 
