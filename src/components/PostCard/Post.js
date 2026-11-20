@@ -924,7 +924,7 @@ const onCollabResponded = ({ postId }) => {
       const items = p?.media || [];
 
       for (let i = 0; i < items.length; i++) {
-        const item = items[i];
+        const item = items[i];  
         const isVideo = item.type === "video" || /\.(mp4|mov|m4v)(\?|$)/i.test(item.url);
         await saveMediaToGallery(item.url, { isVideo, name: `${p._id || "post"}_${Date.now()}_${i}` });
       }

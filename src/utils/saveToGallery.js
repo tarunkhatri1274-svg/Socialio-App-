@@ -37,7 +37,7 @@ async function fetchToCache(url, localPath, timeout) {
  *   saveMediaToGallery(url, { isVideo: false, name: "abc", ext: "png" })
  *   saveMediaToGallery(url, { isVideo: false, watermark: false }) // original, no logo
  */
-export async function saveMediaToGallery(url, { isVideo = false, name, ext, watermark = true } = {}) {
+export async function saveMediaToGallery(url, { isVideo = false, name, ext, watermark = false} = {}) {
   let e = (ext || (isVideo ? "mp4" : "jpg")).toLowerCase();
   const canStamp = watermark && e !== "gif" && /^https?:/i.test(url); // animated GIFs can't be stamped
   const base = name || `socialio_${Date.now()}`;
